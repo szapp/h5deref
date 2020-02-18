@@ -1,25 +1,25 @@
 """
-Core functions
+Reading functions
 """
 import h5py
 import numpy as np
 import warnings
 
 __all__ = [
-    'h5deref',
+    'load',
     'WorkaroundWarning',
 ]
 
 
 class WorkaroundWarning(UserWarning):
     """
-    Issued by `h5deref` when assuming an empty data set.
+    Issued by `load` when assuming an empty data set.
     This is a work around to detect zero size arrays created by MATLAB.
     """
     pass
 
 
-def h5deref(fp, obj=None, **kwargs):  # noqa: C901
+def load(fp, obj=None, **kwargs):  # noqa: C901
     """
     Recursive function to collect data from a HDF5 file with references
 
@@ -76,7 +76,7 @@ def h5deref(fp, obj=None, **kwargs):  # noqa: C901
         if fp.lower().endswith('.mat') and 'transpose' not in kwargs:
             kwargs['transpose'] = True
         with h5py.File(fp, mode='r') as f:
-            obj = h5deref(f, obj, **kwargs)
+            obj = load(f, obj, **kwargs)
         return obj
 
     # Start at root of file
@@ -103,7 +103,7 @@ def h5deref(fp, obj=None, **kwargs):  # noqa: C901
         if obj.dtype == 'O':
             fi = np.nditer(obj, flags=['refs_ok'], op_flags=['readwrite'])
             for it in fi:
-                it[()] = h5deref(fp, it[()], **kwargs)
+                it[()] = load(fp, it[()], **kwargs)
 
         # Use a single object directly
         if obj.size == 1:
@@ -114,8 +114,9 @@ def h5deref(fp, obj=None, **kwargs):  # noqa: C901
         # Only traverse into requested keys (if specified)
         path = kwargs.get('_path', '') + '/'
         items = {name: val for name, val in obj.items()
-                 if [True for i in kwargs.get('keys', [path+name])
-                     if i.startswith(path+name)] and path+name != '/#refs#'}
+                 if [True for i in np.array(kwargs.get('keys', [path+name]),
+                                            ndmin=1, copy=False)
+                     if (path+name).startswith(i)] and path+name != '/#refs#'}
 
         if len(items) == 0:
             return None
@@ -127,13 +128,16 @@ def h5deref(fp, obj=None, **kwargs):  # noqa: C901
             kwargs_child['_path'] = path + name
             names.append(name)
             a = np.empty(1, dtype='O')
-            a[0] = h5deref(fp, it, **kwargs_child)
-            dim.add(len(a[0]) if '__len__' in dir(a[0]) else 1)
+            a[0] = load(fp, it, **kwargs_child)
             arrs.append(a)
+            try:
+                dim.add(len(a[0]))
+            except TypeError:
+                dim.add(1)
 
         # Collapse if same dimensions
-        if len(dim) == 1:
-            arrs = np.array([a[0] for a in arrs])
+        if len(dim) == 1 or kwargs.get('dict'):
+            arrs = [a[0] for a in arrs]
 
         # Collect into record array or dict
         if kwargs.get('dict'):

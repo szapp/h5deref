@@ -11,7 +11,7 @@ setuptools.setup(
     version=h5deref.__version__,
     author="Sören J Zapp",
     author_email="dev.szapp@gmail.com",
-    description="Load HDF5 files",
+    description="Load and save HDF5 files conveniently",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/szapp/h5deref",
@@ -22,8 +22,6 @@ setuptools.setup(
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
-        "Intended Audience :: Science/Research",
-        "Topic :: Scientific/Engineering",
     ],
     python_requires='>=3.6',
 )

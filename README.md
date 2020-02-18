@@ -1,6 +1,53 @@
 h5deref
 =======
 
-Load HDF5 files (h5 file extension) and dereference all contained
-objects recursively and store the result into a numpy record array or
-a python dictionary.
+Save and load HDF5 files (h5 file extension) and resolve all
+references recursively into suitable formats.
+
+Usage
+=====
+
+Usage is straight forward for loading and saving files.
+
+Saving
+------
+
+To write the variables `var`, `var2` and `var3` to a new file, write
+
+```python
+import h5deref
+h5deref.save('/file/path.h5', {'a': var, 'b': var2, 'c': var3})
+```
+
+Additional h5py options like compression can be passed to the datasets.
+
+```python
+import h5deref
+h5deref.save('/file/path.h5', {'a': var}, compression='gzip')
+```
+
+Loading
+-------
+
+All content from a file is loaded into a structured numpy array with
+
+```python
+import h5deref
+data = h5deref.load('/file/path.h5')
+```
+
+The content can alternatively be loaded into a Python dictionary.
+
+```python
+import h5deref
+data = h5deref.load('/file/path.h5', dict=True)
+data.keys()  # dict_keys(['a', 'b', 'c'])
+```
+
+To speed up loading, individual keys can be specified to be loaded only.
+
+```python
+import h5deref
+data = h5deref.load('/file/path.h5', keys=['/a', '/c/subname'])
+data.dtype.names  # ('a', 'c')
+```
