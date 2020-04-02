@@ -9,6 +9,13 @@ be saved as they come and will be rebuild the same way on loading. Python data
 types like dicts, lists, tuples, ranges or slices are maintained and loaded
 exactly as they are saved.
 
+Installation
+============
+
+```
+python setup.py install
+```
+
 Usage
 =====
 
