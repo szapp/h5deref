@@ -46,15 +46,11 @@ To speed up loading, individual keys can be specified to be loaded only.
 ('a', 'c')
 """
 from .save import save
-from .load import (
-    load,
-    WorkaroundWarning,
-)
+from .load import load
 
 __version__ = '0.1.0'
 
 __all__ = [
     'save',
     'load',
-    'WorkaroundWarning',
 ]

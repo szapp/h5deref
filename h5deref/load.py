@@ -7,16 +7,7 @@ import warnings
 
 __all__ = [
     'load',
-    'WorkaroundWarning',
 ]
-
-
-class WorkaroundWarning(UserWarning):
-    """
-    Issued by `load` when assuming an empty data set.
-    This is a work around to detect zero size arrays created by MATLAB.
-    """
-    pass
 
 
 def load(fp, obj=None, **kwargs):  # noqa: C901
@@ -47,35 +38,17 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         Only load the groups/datasets with the specified names. The
         complete path (including '/') is expected. Default is None
 
-    workaround : bool, optional
-        Empty arrays created by MATLAB are stored as zero-valued, one-
-        dimensional arrays of size two `[0, 0]` in HDF5 and cannot be
-        uniquely recognized. If set to True, such arrays will be
-        detected and replaced by empty arrays of size zero when loading.
-        Default is True
-
     Returns
     -------
     obj : numpy.recarray or dict
         Record array or dict containing the entire (copied) structure
-
-    Warns
-    -----
-        When assuming an empty data set. This is a work around to
-        correctly recognize zero size arrays created by MATLAB. This
-        work around can be disabled with `workaround=False`.
-
-        The warnings can be turned off by
-
-        >>> import warnings
-        >>> warnings.simplefilter('ignore', h5deref.WorkaroundWarning)
-
     """
     # Open file from file path
-    if isinstance(fp, str):
-        if fp.lower().endswith('.mat') and 'transpose' not in kwargs:
+    if not isinstance(fp, h5py._hl.files.File):
+        fp = str(fp)
+        if fp.lower().endswith('.mat') and not kwargs.get('transpose'):
             kwargs['transpose'] = True
-        with h5py.File(fp, mode='r') as f:
+        with h5py.File(fp, mode='r', track_order=False) as f:
             obj = load(f, obj, **kwargs)
         return obj
 
@@ -87,23 +60,46 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
     if isinstance(obj, h5py.h5r.Reference):
         obj = fp[obj]
 
+    # Restore Python specific data type attribute
+    if isinstance(obj, (h5py._hl.dataset.Dataset, h5py._hl.group.Group)):
+        tp = obj.attrs.get('type')
+        if obj.attrs.get('MATLAB_empty'):
+            obj = np.empty(0)
+    else:
+        tp = None
+
+    # Recover NoneType
+    if isinstance(obj, h5py._hl.dataset.Dataset):
+        if obj.shape is None:
+            obj = None
+        elif obj.attrs.get('MATLAB_class') == b'char':
+            if obj.shape[1] == 1:
+                obj = ''.join(map(chr, obj[()]))
+            else:
+                obj = [''.join(map(chr, ll)) for ll in obj[()].T]
+
     # Recurse into datasets and groups
     if isinstance(obj, h5py._hl.dataset.Dataset):
-        # Special case for empty variables from MATLAB
-        if np.array_equal(obj, np.zeros(2, int)) and kwargs.get('workaround',
-                                                                True):
-            warnings.warn(f'Assuming empty array in {kwargs.get("_path")}',
-                          WorkaroundWarning, stacklevel=2)
-            obj = np.empty(0, dtype='uint8')
+        islogical = obj.attrs.get('MATLAB_class') == b'logical'
 
         # Copy, transpose and squeeze dimensions of numpy array
-        obj = np.squeeze(obj).T if kwargs.get('transpose') else np.squeeze(obj)
+        if kwargs.get('transpose'):
+            if obj.ndim == 2 and obj.shape[1] == 1:
+                obj = np.squeeze(obj, axis=1)
+            else:
+                obj = np.asarray(obj).T
+        else:
+            obj = np.asarray(obj)
 
         # Recurse into data set
-        if obj.dtype == 'O':
+        if obj.dtype == 'O' and obj.size:
             fi = np.nditer(obj, flags=['refs_ok'], op_flags=['readwrite'])
             for it in fi:
                 it[()] = load(fp, it[()], **kwargs)
+
+        # MATLAB developers are not aware of the bool type in H5
+        if islogical:
+            obj = obj.astype('bool')
 
         # Use a single object directly
         if obj.size == 1:
@@ -116,33 +112,60 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         items = {name: val for name, val in obj.items()
                  if [True for i in np.array(kwargs.get('keys', [path+name]),
                                             ndmin=1, copy=False)
-                     if (path+name).startswith(i)] and path+name != '/#refs#'}
+                     if (path+name).startswith(i[:len(path+name)])]
+                 and path+name != '/#refs#'}
 
         if len(items) == 0:
             return None
 
         # Recurse into groups and maintain their names for indexing
-        arrs, names, dim = [], [], set()
+        arrs = []
+        dt = []
         kwargs_child = kwargs.copy()
         for name, it in items.items():
             kwargs_child['_path'] = path + name
-            names.append(name)
-            a = np.empty(1, dtype='O')
-            a[0] = load(fp, it, **kwargs_child)
-            arrs.append(a)
-            try:
-                dim.add(len(a[0]))
-            except TypeError:
-                dim.add(1)
+            a = load(fp, it, **kwargs_child)
 
-        # Collapse if same dimensions
-        if len(dim) == 1 or kwargs.get('dict'):
-            arrs = [a[0] for a in arrs]
+            # Differentiate between dict and np.recarray
+            if kwargs.get('dict') or tp == 'dict':
+                dt.append(name)
+            else:
+                # Save python lists and other objects from greedy numpy
+                if not isinstance(a, (np.ndarray, np.generic)):
+                    if not obj.attrs.get('type'):
+                        a = np.array(a, ndmin=1)
+                    else:
+                        b = np.empty(1, 'O')
+                        b[0] = a
+                        a = b
+                if (np.prod(a.shape) * np.dtype(a.dtype).itemsize
+                        > np.iinfo(np.int32).max):
+                    # Skip way too large objects (numpy cannot handle)
+                    warnings.warn(f'Field \'{path+name}\' has too large '
+                                  'dimensions. Skipping. Try using '
+                                  '\'dict=True\'', UserWarning)
+                    continue
+                dt.append((name, a.dtype, a.shape))
+
+            arrs.append(a)
 
         # Collect into record array or dict
-        if kwargs.get('dict'):
-            obj = dict(zip(names, arrs))
+        if kwargs.get('dict') or tp == 'dict':
+            obj = dict(zip(dt, arrs))
         else:
-            obj = np.rec.fromarrays(arrs, names=names)
+            obj = np.rec.fromarrays(arrs, dtype=np.dtype(dt))
+
+    # Resolve Python specific types
+    if tp == 'list':
+        obj = (obj.tolist() if isinstance(obj, (np.ndarray, np.generic))
+               else list(obj))
+    elif tp == 'tuple':
+        obj = tuple(obj)
+    elif tp == 'range':
+        obj = range(*obj)
+    elif tp == 'slice':
+        obj = slice(*obj)
+    elif tp == 'NoneType':
+        obj = None
 
     return obj
