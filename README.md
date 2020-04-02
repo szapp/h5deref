@@ -4,10 +4,10 @@ h5deref
 Save and load HDF5 files (h5 file extension) and resolve all references
 recursively into suitable formats.
 
-Complicated, nested structures like dictionaries or structured numpy arrays may
-be saved as they come and will be rebuild the same way on loading. Python data
-types like dicts, lists, tuples, ranges or slices are maintained and loaded
-exactly as they are saved.
+Complicated, nested structures like dictionaries or structured numpy
+arrays may be saved as they come and will be rebuild the same way on
+loading. Python data types like dicts, lists, tuples, ranges or slices
+are maintained and loaded exactly as they are saved.
 
 Installation
 ============
@@ -27,15 +27,15 @@ Saving
 To write the variables `var`, `var2` and `var3` to a new file, write
 
 ```python
-import h5deref
-h5deref.save('/file/path.h5', {'a': var, 'b': var2, 'c': var3})
+from h5deref import h5save
+h5save('/file/path.h5', {'a': var, 'b': var2, 'c': var3})
 ```
 
 Additional h5py options like compression can be passed to the datasets.
 
 ```python
-import h5deref
-h5deref.save('/file/path.h5', {'a': var}, compression='gzip')
+from h5deref import h5save
+h5save('/file/path.h5', {'a': var}, compression='gzip')
 ```
 
 Loading
@@ -44,32 +44,32 @@ Loading
 All content from a file is loaded into a structured numpy array with
 
 ```python
-import h5deref
-data = h5deref.load('/file/path.h5')
+from h5deref import h5load
+data = h5load('/file/path.h5')
 data.var2.nested.variables  # Access easily through numpy recarray
 ```
 
 The content can alternatively be loaded into a Python dictionary.
 
 ```python
-import h5deref
-data = h5deref.load('/file/path.h5', dict=True)
+from h5deref import h5load
+data = h5load('/file/path.h5', dict=True)
 data.keys()  # dict_keys(['a', 'b', 'c'])
 ```
 
 To speed up loading, individual keys can be specified to be loaded only.
 
 ```python
-import h5deref
-data = h5deref.load('/file/path.h5', keys=['/a', '/c/subname'])
+from h5deref import h5load
+data = h5load('/file/path.h5', keys=['/a', '/c/subname'])
 data.dtype.names  # ('a', 'c')
 ```
-These can be written into different variables directly. They are unpacked in
-alpha-numerical order, not in order of specification.
+These can be written into different variables directly. They are
+unpacked in alpha-numerical order, not in order of specification.
 
 ```python
-import h5deref
-a, c = h5deref.load('/file/path.h5', keys=['/a', '/c/subname'])[()]
+from h5deref import h5load
+a, c = h5load('/file/path.h5', keys=['/a', '/c/subname'])[()]
 ```
 
 MAT Files
