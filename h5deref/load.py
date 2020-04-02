@@ -153,7 +153,31 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         if kwargs.get('dict') or tp == 'dict':
             obj = dict(zip(dt, arrs))
         else:
-            obj = np.rec.fromarrays(arrs, dtype=np.dtype(dt))
+            # Check for common dimensions
+            dims = [a.shape for a in arrs]
+            idx = [i for i, j in enumerate(zip(*dims)) if len(set(j)) != 1]
+
+            # Are there shared dimensions between all arrays?
+            if idx or (not idx and len(set(map(len, dims))) == 1):
+                # Collapse dimensions to parent
+                idx = idx[0] if idx else len(dims[0])
+
+                # Remove common dimensions from elements
+                for i in range(len(dt)):
+                    shape = dt[i][2][idx:]  # Cut off common dimensions
+                    dt[i] = dt[i][:2] + (shape,)  # Stitch back together
+
+                # Create empty array with first x common dimensions
+                obj = np.empty(dims[0][:idx],
+                               dtype=np.dtype(dt)).view(np.recarray)
+
+                # Fill data to match the common dimensions
+                for arr, d in zip(arrs, dt):
+                    name = d[0]
+                    obj[name] = arr
+            else:
+                # Size-less record
+                obj = np.rec.fromarrays(arrs, dtype=np.dtype(dt))
 
     # Resolve Python specific types
     if tp == 'list':
