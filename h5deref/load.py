@@ -83,13 +83,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         islogical = obj.attrs.get('MATLAB_class') == b'logical'
 
         # Copy, transpose and squeeze dimensions of numpy array
-        if kwargs.get('transpose'):
-            if obj.ndim == 2 and obj.shape[1] == 1:
-                obj = np.squeeze(obj, axis=1)
-            else:
-                obj = np.asarray(obj).T
-        else:
-            obj = np.asarray(obj)
+        obj = np.squeeze(obj).T if kwargs.get('transpose') else np.squeeze(obj)
 
         # Recurse into data set
         if obj.dtype == 'O' and obj.size:
