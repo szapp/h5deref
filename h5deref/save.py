@@ -32,7 +32,13 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
             can.attrs['MATLAB_empty'] = 1
             can.attrs['MATLAB_class'] = b'canonical empty'
 
-    elif valasarr.dtype.kind in 'O':
+    elif valasarr.dtype.kind == 'U' and transp:
+        val = np.atleast_1d(val)
+        val = val.view(np.uint32).reshape(*val.shape, -1).astype('uint16')
+        par.create_dataset(key, data=val.T, **kwargs)
+        par[key].attrs['MATLAB_class'] = b'char'
+        par[key].attrs['MATLAB_int_decode'] = 2
+    elif valasarr.dtype.kind in ('O', 'U'):
         shape = (len(val), 1) if transp else (len(val),)
         rf = par.create_dataset(key, shape=shape, dtype=h5py.ref_dtype,
                                 **kwargs)
@@ -41,12 +47,6 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
             incr = len(refs.items())
             _sortinto(refs, str(incr), v, transp, **kwargs)
             rf[i] = refs[str(incr)].ref
-    elif valasarr.dtype.kind == 'U' and transp:
-        val = np.atleast_1d(val)
-        val = val.view(np.uint32).reshape(*val.shape, -1).astype('uint16')
-        par.create_dataset(key, data=val.T, **kwargs)
-        par[key].attrs['MATLAB_class'] = b'char'
-        par[key].attrs['MATLAB_int_decode'] = 2
     else:
         if transp:
             dt = 'uint8' if valasarr.dtype == 'bool' else None
@@ -63,7 +63,18 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
             else:
                 par[key].attrs['MATLAB_class'] = dt.name.encode()
         else:
-            par.create_dataset(key, data=val, **kwargs)
+            # Remove filters for scalers
+            if valasarr.shape == ():
+                kwargs_child = kwargs.copy()
+                kwargs_child.update({'chunks': None,
+                                     'compression': None,
+                                     'compression_opts': None,
+                                     'shuffle': None,
+                                     'fletcher32': None,
+                                     'scaleoffset': None})
+                par.create_dataset(key, data=val, **kwargs_child)
+            else:
+                par.create_dataset(key, data=val, **kwargs)
 
     if transp and isinstance(par[key], h5py._hl.dataset.Dataset):
         par[key].attrs['H5PATH'] = ('/'+par.name.replace('/', '')).encode()
