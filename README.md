@@ -81,16 +81,16 @@ write them as well, while correctly transposing the data (by identifying MATLAB
 files by their file extension).
 
 These MATLAB files may thus function as convenient interface to share heavy
-MATLAB structs or python dictionaries/structured numpy arrays between python and
+MATLAB structs or Python dictionaries/structured numpy arrays between Python and
 MATLAB without any data conversion or complicated loading scripts.
 
 ```python
-from h5deref import save as h5save, load as h5load  # Convenient access
+from h5deref import h5save, h5load
 data = h5load('/file/path.mat').data
 # ...
 h5save('/file/path.mat', {'data': data})
 ```
-On loading, singleton dimensions are squeezed for easier indexing in python.
+On loading, singleton dimensions are squeezed for easier indexing in Python.
 Saving MATLAB files will append singleton dimensions to the beginning of
 one-dimensional arrays for compatibility with MATLAB. When saving a previously
 loaded MATLAB file, it is unavoidable that one-dimensional matrices may end up
