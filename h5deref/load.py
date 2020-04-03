@@ -3,7 +3,6 @@ Reading functions
 """
 import h5py
 import numpy as np
-import warnings
 
 __all__ = [
     'load',
@@ -103,11 +102,20 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
 
         # Only traverse into requested keys (if specified)
         path = kwargs.get('_path', '') + '/'
-        items = {name: val for name, val in obj.items()
-                 if [True for i in np.array(kwargs.get('keys', [path+name]),
-                                            ndmin=1, copy=False)
-                     if (path+name).startswith(i[:len(path+name)])]
-                 and path+name != '/#refs#'}
+        items = dict()
+        for name, val in obj.items():
+            fullpath = path + name
+
+            # Exclude reference group always
+            if fullpath == '/#refs#':
+                continue
+
+            # Add current item if specified or if no specifications
+            for key in list(kwargs.get('keys', fullpath)):
+                key = ('/' + key.lstrip('/'))[:len(fullpath)]
+                if fullpath.startswith(key):
+                    items[name] = val
+                    break
 
         if len(items) == 0:
             return None
@@ -126,19 +134,15 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
             else:
                 # Save python lists and other objects from greedy numpy
                 if not isinstance(a, (np.ndarray, np.generic)):
-                    if not obj.attrs.get('type'):
+                    if not it.attrs.get('type'):
                         a = np.array(a, ndmin=1)
                     else:
-                        b = np.empty(1, 'O')
-                        b[0] = a
-                        a = b
+                        a = np.array([a, 0], 'O')[:1]  # 1 buffer element
                 if (np.prod(a.shape) * np.dtype(a.dtype).itemsize
                         > np.iinfo(np.int32).max):
-                    # Skip way too large objects (numpy cannot handle)
-                    warnings.warn(f'Field \'{path+name}\' has too large '
-                                  'dimensions. Skipping. Try using '
-                                  '\'dict=True\'', UserWarning)
-                    continue
+                    # Wrap arrays with too large shape (numpy cannot handle)
+                    a = np.array([a, 0], 'O')[:1]  # 1 buffer element
+
                 dt.append((name, a.dtype, a.shape))
 
             arrs.append(a)
