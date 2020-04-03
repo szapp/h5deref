@@ -16,22 +16,6 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
         rf = par.create_group(key)
         for k in val.dtype.names:
             _sortinto(rf, k, val[k], transp, **kwargs)
-        if transp:
-            rf.attrs['MATLAB_class'] = b'struct'
-
-            # Create struct fields
-            fields = ('_',) + val.dtype.names  # Extra element necessary
-            rf.attrs['MATLAB_fields'] = np.array(
-                [np.array([c.encode() for c in f]) for f in fields],
-                dtype=h5py.vlen_dtype(np.dtype('|S1')))[1:]
-
-            # Create canonical empty entry 'a'
-            refs = par.file.require_group('#refs#')
-            can = refs.require_dataset('a', shape=(2,), dtype='uint64',
-                                       exact=True)
-            can.attrs['MATLAB_empty'] = 1
-            can.attrs['MATLAB_class'] = b'canonical empty'
-
     elif valasarr.dtype.kind == 'U' and transp:
         val = np.atleast_1d(val)
         val = val.view(np.uint32).reshape(*val.shape, -1).astype('uint16')
@@ -44,40 +28,25 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
                                 **kwargs)
         for i, v in enumerate(val):
             refs = par.file.require_group('#refs#')
-            incr = len(refs.items())
-            _sortinto(refs, str(incr), v, transp, **kwargs)
-            rf[i] = refs[str(incr)].ref
+            incr = str(len(refs.items()))
+            _sortinto(refs, incr, v, transp, **kwargs)
+            rf[i] = refs[incr].ref
     else:
+        kwargs_child = kwargs.copy()
+
+        # Remove filters for scalers
+        if valasarr.size == 1:
+            kwargs_child.update({'chunks': None, 'compression': None,
+                                 'compression_opts': None, 'shuffle': None,
+                                 'fletcher32': None, 'scaleoffset': None})
+
         if transp:
             dt = 'uint8' if valasarr.dtype == 'bool' else None
             par.create_dataset(key, data=np.atleast_2d(val).T, dtype=dt,
-                               **kwargs)
-            dt = valasarr.dtype
-            if valasarr.dtype == 'float32':
-                par[key].attrs['MATLAB_class'] = b'single'
-            elif valasarr.dtype == 'float64':
-                par[key].attrs['MATLAB_class'] = b'double'
-            elif valasarr.dtype == 'bool':
-                par[key].attrs['MATLAB_class'] = b'logical'
-                par[key].attrs['MATLAB_int_decode'] = 1
-            else:
-                par[key].attrs['MATLAB_class'] = dt.name.encode()
+                               **kwargs_child)
+            _setmatlabtype(par[key], val)
         else:
-            # Remove filters for scalers
-            if valasarr.shape == ():
-                kwargs_child = kwargs.copy()
-                kwargs_child.update({'chunks': None,
-                                     'compression': None,
-                                     'compression_opts': None,
-                                     'shuffle': None,
-                                     'fletcher32': None,
-                                     'scaleoffset': None})
-                par.create_dataset(key, data=val, **kwargs_child)
-            else:
-                par.create_dataset(key, data=val, **kwargs)
-
-    if transp and isinstance(par[key], h5py._hl.dataset.Dataset):
-        par[key].attrs['H5PATH'] = ('/'+par.name.replace('/', '')).encode()
+            par.create_dataset(key, data=val, **kwargs_child)
 
 
 def _sortdict(par, key, val, transp=False, **kwargs):
@@ -94,8 +63,6 @@ def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
     elif isinstance(val, dict):
         _sortdict(par, key, val, transp, **kwargs)
         par[key].attrs['type'] = 'dict'
-        if transp:
-            par[key].attrs['MATLAB_class'] = b'struct'
     elif isinstance(val, list):
         if len(val) == 0 and transp:
             _sortarray(par, key, np.zeros(2, dtype='uint64'))
@@ -107,8 +74,7 @@ def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
         _sortarray(par, key, val, transp, **kwargs)
         par[key].attrs['type'] = 'tuple'
     elif isinstance(val, slice):
-        _sortarray(par, key, [val.start, val.stop, val.step], transp,
-                   **kwargs)
+        _sortarray(par, key, [val.start, val.stop, val.step], transp, **kwargs)
         par[key].attrs['type'] = 'slice'
     elif isinstance(val, range):
         _sortarray(par, key, [val.start, val.stop, val.step], transp, **kwargs)
@@ -123,8 +89,72 @@ def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
         _sortarray(par, key, val, transp, **kwargs)
         par[key].attrs['MATLAB_class'] = b'char'
         par[key].attrs['MATLAB_int_decode'] = 2
+    elif transp:
+        _sortarray(par, key, np.asarray(val), transp, **kwargs)
     else:
         par[key] = val
+
+
+def _setmatlabtype(obj, val):
+    """Set MATLAB attributes"""
+    dt = np.asarray(val).dtype
+
+    if dt in ('float32', 'float16'):
+        obj.attrs['MATLAB_class'] = b'single'
+    elif dt == 'float64':
+        obj.attrs['MATLAB_class'] = b'double'
+    elif dt == 'bool':
+        obj.attrs['MATLAB_class'] = b'logical'
+        obj.attrs['MATLAB_int_decode'] = 1
+    else:
+        obj.attrs['MATLAB_class'] = dt.name.encode()
+
+
+def _fixmatlabstruct(fp):  # noqa: C901
+    """Verify MATLAB structs: It cannot load mixed non-scalar structs"""
+    groups = []
+
+    def collectgroups(name, obj):
+        if isinstance(obj, h5py._hl.group.Group) and name != '/#refs#':
+            groups.append(obj)
+    fp.visititems(collectgroups)
+
+    for group in groups:
+        # Iterate over all immediate children to check for refs
+        for child in group.values():
+            if (isinstance(child, h5py._hl.dataset.Dataset) and
+                    child.dtype == h5py.h5r.Reference):
+                break
+        else:
+            continue
+
+        # If there is a reference, turn all into references
+        refs = fp.require_group('#refs#')
+        for childname, child in group.items():
+            if not isinstance(child, h5py._hl.dataset.Dataset):
+                continue
+            if child.dtype == h5py.h5r.Reference:
+                continue
+
+            # Create a new dataset (create_dataset_like does not work)
+            rf = group.create_dataset('__h5dereftemp__', shape=child.shape,
+                                      dtype=h5py.ref_dtype)
+
+            # Differentiate scalar and non-scalar datasets
+            if child.shape:
+                for i, v in enumerate(child):
+                    incr = str(len(refs.items()))
+                    refs[incr] = v
+                    rf[i] = refs[incr].ref
+            else:
+                incr = str(len(refs.items()))
+                refs[incr] = child
+                rf[()] = refs[incr].ref
+
+            # Update the group-child relationship
+            del group[childname]
+            group[childname] = group['__h5dereftemp__']
+            del group['__h5dereftemp__']
 
 
 def save(fp, data, transpose=None, **kwargs):
@@ -171,3 +201,6 @@ def save(fp, data, transpose=None, **kwargs):
     else:
         for key, val in data.items():
             _sortinto(fp, key, val, transpose, **kwargs)
+
+        if transpose:
+            _fixmatlabstruct(fp)
