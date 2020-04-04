@@ -41,13 +41,23 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
     -------
     obj : numpy.recarray or dict
         Record array or dict containing the entire (copied) structure
+
+    Notes
+    -----
+    The content is set to be retrieved following the order in which
+    they were originally added (tracking order) if this was enabled. If
+    `keys` is supplied, the retrieval is set to alpha-numerical order
+    instead to enable proper variable assignment on unpacking.
+
+    The objects within the root of the file are not ordered in HDF5 and
+    are therefore always returned in alpha-numerical order.
     """
     # Open file from file path
     if not isinstance(fp, h5py._hl.files.File):
         fp = str(fp)
-        if fp.lower().endswith('.mat') and not kwargs.get('transpose'):
+        if fp.lower().endswith('.mat') and 'transpose' not in kwargs:
             kwargs['transpose'] = True
-        with h5py.File(fp, mode='r', track_order=False) as f:
+        with h5py.File(fp, mode='r') as f:
             obj = load(f, obj, **kwargs)
         return obj
 
@@ -100,10 +110,24 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
 
     elif isinstance(obj, (h5py._hl.group.Group, h5py._hl.files.File)):
 
+        # Retrieve in tracking order or alpha numerical order
+        if 'keys' in kwargs:
+            # Alpha-numerical order
+            fields = sorted(obj.keys())
+            fields = {f: obj[f] for f in fields}
+        elif 'MATLAB_fields' in obj.attrs:
+            # Tracked order: special for MATLAB files (due to save.py)
+            fields = obj.attrs.get('MATLAB_fields')
+            fields = [''.join(i.astype(str)) for i in fields]
+            fields = dict(zip(fields, [obj[f] for f in fields]))
+        else:
+            # Tracked order (if any)
+            fields = obj
+
         # Only traverse into requested keys (if specified)
         path = kwargs.get('_path', '') + '/'
         items = dict()
-        for name, val in obj.items():
+        for name, val in fields.items():
             fullpath = path + name
 
             # Exclude reference group always
@@ -135,13 +159,17 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                 # Save python lists and other objects from greedy numpy
                 if not isinstance(a, (np.ndarray, np.generic)):
                     if not it.attrs.get('type'):
-                        a = np.array(a, ndmin=1)
+                        a = np.array(a)
                     else:
-                        a = np.array([a, 0], 'O')[:1]  # 1 buffer element
+                        b = np.empty(shape=(), dtype='O')  # No shape
+                        b[()] = a
+                        a = b
                 if (np.prod(a.shape) * np.dtype(a.dtype).itemsize
                         > np.iinfo(np.int32).max):
                     # Wrap arrays with too large shape (numpy cannot handle)
-                    a = np.array([a, 0], 'O')[:1]  # 1 buffer element
+                    b = np.empty(shape=(), dtype='O')  # No shape
+                    b[()] = a
+                    a = b
 
                 dt.append((name, a.dtype, a.shape))
 

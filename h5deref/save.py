@@ -13,45 +13,46 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
     """Add lists, numpy arrays, and numpy record arrays"""
     valasarr = np.asarray(val)
     if valasarr.dtype.names:
-        rf = par.create_group(key)
+        rf = par.create_group(key, track_order=True)
         for k in val.dtype.names:
             _sortinto(rf, k, val[k], transp, **kwargs)
     elif valasarr.dtype.kind == 'U' and transp:
         val = np.atleast_1d(val)
         val = val.view(np.uint32).reshape(*val.shape, -1).astype('uint16')
         par.create_dataset(key, data=val.T, **kwargs)
-        par[key].attrs['MATLAB_class'] = b'char'
-        par[key].attrs['MATLAB_int_decode'] = 2
+        if transp:
+            _setmatlabtype(par[key], 'U')  # valasarr.dtype not working
     elif valasarr.dtype.kind in ('O', 'U'):
-        shape = (len(val), 1) if transp else (len(val),)
-        rf = par.create_dataset(key, shape=shape, dtype=h5py.ref_dtype,
-                                **kwargs)
-        for i, v in enumerate(val):
-            refs = par.file.require_group('#refs#')
+        if transp:
+            valasarr = np.atleast_2d(valasarr).T
+        rf = par.create_dataset(key, shape=valasarr.shape,
+                                dtype=h5py.ref_dtype,
+                                **_removescalarfilters(kwargs))
+        refs = par.file.require_group('#refs#')
+        fi = np.nditer(valasarr, flags=['refs_ok', 'multi_index'],
+                       itershape=valasarr.shape)
+        for v in fi:
             incr = str(len(refs.items()))
-            _sortinto(refs, incr, v, transp, **kwargs)
-            rf[i] = refs[incr].ref
+            _sortinto(refs, incr, v[()], transp, **kwargs)  # Filters
+            rf[fi.multi_index] = refs[incr].ref
+        if transp and valasarr.dtype.kind == 'U':
+            _setmatlabtype(par[key], valasarr.dtype)
     else:
-        kwargs_child = kwargs.copy()
-
-        # Remove filters for scalers
         if valasarr.size == 1:
-            kwargs_child.update({'chunks': None, 'compression': None,
-                                 'compression_opts': None, 'shuffle': None,
-                                 'fletcher32': None, 'scaleoffset': None})
+            kwargs = _removescalarfilters(kwargs)
 
         if transp:
             dt = 'uint8' if valasarr.dtype == 'bool' else None
             par.create_dataset(key, data=np.atleast_2d(val).T, dtype=dt,
-                               **kwargs_child)
-            _setmatlabtype(par[key], val)
+                               **kwargs)
+            _setmatlabtype(par[key], valasarr.dtype)
         else:
-            par.create_dataset(key, data=val, **kwargs_child)
+            par.create_dataset(key, data=val, **kwargs)
 
 
 def _sortdict(par, key, val, transp=False, **kwargs):
     """Add dict and recurse into it"""
-    p = par.create_group(key)
+    p = par.create_group(key, track_order=True)
     for k, v in val.items():
         _sortinto(p, k, v, transp, **kwargs)
 
@@ -66,10 +67,12 @@ def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
     elif isinstance(val, list):
         if len(val) == 0 and transp:
             _sortarray(par, key, np.zeros(2, dtype='uint64'))
-            par[key].attrs['MATLAB_empty'] = 1
+            _setmatlabtype(par[key], 0)
         else:
             _sortarray(par, key, val, transp, **kwargs)
-            par[key].attrs['type'] = 'list'
+        par[key].attrs['type'] = 'list'
+        if transp:
+            _setmatlabtype(par[key], 'O')  # Cell array
     elif isinstance(val, tuple):
         _sortarray(par, key, val, transp, **kwargs)
         par[key].attrs['type'] = 'tuple'
@@ -80,34 +83,51 @@ def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
         _sortarray(par, key, [val.start, val.stop, val.step], transp, **kwargs)
         par[key].attrs['type'] = 'range'
     elif isinstance(val, type(None)):
-        par.create_dataset(key, dtype='bool')  # Empty data set
-        par[key].attrs['type'] = 'NoneType'
         if transp:
-            par[key].attrs['MATLAB_empty'] = 1
+            # Closest to NoneType in MATLAB is empty list []
+            _sortarray(par, key, np.zeros(2, dtype='uint64'))
+            _setmatlabtype(par[key], 0)
+        else:
+            par.create_dataset(key, dtype='bool')  # Empty data set
+        par[key].attrs['type'] = 'NoneType'
     elif isinstance(val, str) and transp:
-        val = np.array(list(map(ord, val)), dtype='uint16')
+        val = np.fromiter(map(ord, val), dtype='uint16')
         _sortarray(par, key, val, transp, **kwargs)
-        par[key].attrs['MATLAB_class'] = b'char'
-        par[key].attrs['MATLAB_int_decode'] = 2
+        _setmatlabtype(par[key], np.dtype(np.str_))
     elif transp:
         _sortarray(par, key, np.asarray(val), transp, **kwargs)
     else:
         par[key] = val
 
 
-def _setmatlabtype(obj, val):
-    """Set MATLAB attributes"""
-    dt = np.asarray(val).dtype
+def _removescalarfilters(filters):
+    """Remove any filter not supported by scalar datasets"""
+    filters_updated = filters.copy()
+    filters_updated.update({'chunks': None, 'compression': None,
+                            'compression_opts': None, 'shuffle': None,
+                            'fletcher32': None, 'scaleoffset': None})
+    return filters_updated
 
-    if dt in ('float32', 'float16'):
-        obj.attrs['MATLAB_class'] = b'single'
+
+def _setmatlabtype(obj, dt):
+    """Set MATLAB attributes"""
+    if not dt:  # Empty dataset
+        obj.attrs['MATLAB_class'] = np.bytes_('double')
+        obj.attrs['MATLAB_empty'] = np.uint8(1)
+    elif dt in ('float32', 'float16'):
+        obj.attrs['MATLAB_class'] = np.bytes_('single')
     elif dt == 'float64':
-        obj.attrs['MATLAB_class'] = b'double'
+        obj.attrs['MATLAB_class'] = np.bytes_('double')
     elif dt == 'bool':
-        obj.attrs['MATLAB_class'] = b'logical'
-        obj.attrs['MATLAB_int_decode'] = 1
+        obj.attrs['MATLAB_class'] = np.bytes_('logical')
+        obj.attrs['MATLAB_int_decode'] = np.uint8(1)
+    elif dt == 'U':
+        obj.attrs['MATLAB_class'] = np.bytes_('char')
+        obj.attrs['MATLAB_int_decode'] = np.uint8(2)
+    elif dt == 'O':  # Only for non-numpy lists
+        obj.attrs['MATLAB_class'] = np.bytes_('cell')
     else:
-        obj.attrs['MATLAB_class'] = dt.name.encode()
+        obj.attrs['MATLAB_class'] = np.bytes_(dt.name)
 
 
 def _fixmatlabstruct(fp):  # noqa: C901
@@ -115,11 +135,20 @@ def _fixmatlabstruct(fp):  # noqa: C901
     groups = []
 
     def collectgroups(name, obj):
-        if isinstance(obj, h5py._hl.group.Group) and name != '/#refs#':
+        if (isinstance(obj, (h5py._hl.files.File, h5py._hl.group.Group)) and
+                name.lstrip('/') != '#refs#'):
             groups.append(obj)
     fp.visititems(collectgroups)
 
     for group in groups:
+        group.attrs['MATLAB_class'] = np.bytes_('struct')
+
+        # Create struct fields
+        fields = ('_',) + tuple(group.keys())  # Extra element necessary
+        group.attrs['MATLAB_fields'] = np.array(
+            [np.fromiter(f, '|S1') for f in fields],
+            dtype=h5py.vlen_dtype(np.dtype('|S1')))[1:]
+
         # Iterate over all immediate children to check for refs
         for child in group.values():
             if (isinstance(child, h5py._hl.dataset.Dataset) and
@@ -136,25 +165,33 @@ def _fixmatlabstruct(fp):  # noqa: C901
             if child.dtype == h5py.h5r.Reference:
                 continue
 
-            # Create a new dataset (create_dataset_like does not work)
-            rf = group.create_dataset('__h5dereftemp__', shape=child.shape,
-                                      dtype=h5py.ref_dtype)
-
-            # Differentiate scalar and non-scalar datasets
-            if child.shape:
-                for i, v in enumerate(child):
-                    incr = str(len(refs.items()))
-                    refs[incr] = v
-                    rf[i] = refs[incr].ref
-            else:
+            if child.shape is None:
                 incr = str(len(refs.items()))
-                refs[incr] = child
-                rf[()] = refs[incr].ref
+                group.copy(child, refs, name=incr)
+                del group[childname]
+                group[childname] = refs[incr].ref
+            else:
+                # Create a new dataset (create_dataset_like does not work)
+                rf = group.create_dataset('__h5dereftemp__', shape=child.shape,
+                                          dtype=h5py.ref_dtype)
 
-            # Update the group-child relationship
-            del group[childname]
-            group[childname] = group['__h5dereftemp__']
-            del group['__h5dereftemp__']
+                # Iterate over dataset entries
+                fi = np.nditer(child, flags=['refs_ok', 'multi_index'],
+                               itershape=child.shape)
+                for v in fi:
+                    incr = str(len(refs.items()))
+                    refs.create_dataset_like(incr, child,
+                                             shape=np.atleast_2d(v).shape,
+                                             chunks=None, maxshape=None)
+                    refs[incr][()] = v
+                    for atr_key, atr_val in child.attrs.items():
+                        refs[incr].attrs[atr_key] = atr_val
+                    rf[fi.multi_index] = refs[incr].ref
+
+                # Update the group-child relationship
+                del group[childname]
+                group[childname] = group['__h5dereftemp__']
+                del group['__h5dereftemp__']
 
 
 def save(fp, data, transpose=None, **kwargs):
@@ -177,19 +214,24 @@ def save(fp, data, transpose=None, **kwargs):
 
     Notes
     -----
-    Additional parameters (`**kwargs`) cam be passed to `create_dataset`
+    Additional parameters (`**kwargs`) can be passed to `create_dataset`
     of `h5py`. This is useful to add further options like compression.
+
+    The order of adding the data is set to be tracked by HDF5.
     """
     # Open file from file path
     if not isinstance(fp, h5py._hl.files.File):
         fp = str(fp)
+        fileargs = {'track_order': True}
         matlabfile = fp.lower().endswith('.mat')
         if matlabfile:
             transpose = transpose or True
             if not kwargs.get('compression'):
                 kwargs['compression'] = 'gzip'
                 kwargs['compression_opts'] = 3
-        with h5py.File(fp, mode='w', userblock_size=0x200*matlabfile) as f:
+            fileargs['userblock_size'] = 0x200
+
+        with h5py.File(fp, mode='w', **fileargs) as f:
             save(f, data, transpose, **kwargs)
 
         # Add MATLAB file support
