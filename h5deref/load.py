@@ -73,7 +73,10 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
     if isinstance(obj, (h5py._hl.dataset.Dataset, h5py._hl.group.Group)):
         tp = obj.attrs.get('type')
         if obj.attrs.get('MATLAB_empty'):
-            obj = np.empty(0)
+            if obj.attrs.get('MATLAB_class') == b'char':
+                obj = ''
+            else:
+                obj = np.empty(0)
     else:
         tp = None
 

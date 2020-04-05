@@ -38,13 +38,17 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
         if transp and valasarr.dtype.kind == 'U':
             _setmatlabtype(par[key], valasarr.dtype)
     else:
-        if valasarr.size == 1:
+        if valasarr.size < 2:
             kwargs = _removescalarfilters(kwargs)
 
         if transp:
-            dt = 'uint8' if valasarr.dtype == 'bool' else None
-            par.create_dataset(key, data=np.atleast_2d(val).T, dtype=dt,
-                               **kwargs)
+            if valasarr.size == 0:
+                _sortarray(par, key, np.zeros(2, dtype='uint64'))
+                _setmatlabtype(par[key], 0)
+            else:
+                dt = 'uint8' if valasarr.dtype == 'bool' else None
+                par.create_dataset(key, data=np.atleast_2d(val).T, dtype=dt,
+                                   **kwargs)
             _setmatlabtype(par[key], valasarr.dtype)
         else:
             par.create_dataset(key, data=val, **kwargs)
@@ -136,8 +140,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
     groups = []
 
     def collectgroups(name, obj):
-        if (isinstance(obj, (h5py._hl.files.File, h5py._hl.group.Group)) and
-                name.lstrip('/') != '#refs#'):
+        if isinstance(obj, h5py._hl.group.Group) and name != '#refs#':
             groups.append(obj)
     fp.visititems(collectgroups)
 
@@ -153,39 +156,40 @@ def _fixmatlabstruct(fp):  # noqa: C901
         # Iterate over all children to determine if it should be scalar
         shape = set()
         hasgroups = False
+        references = []
         for child in group.values():
-            if not isinstance(child, h5py._hl.dataset.Dataset):
+            if isinstance(child, h5py._hl.group.Group):
                 hasgroups = True
             else:
+                if child.dtype == h5py.h5r.Reference:
+                    references.append(child)
                 shape.add(child.shape)
-                if len(shape) != 1:
-                    break
 
         # Different shapes = non-scalar: nothing to do
         if len(shape) != 1 or (hasgroups and shape.pop() != 1):
+            # In scalar structs object arrays need to be cell arrays
+            for child in references:
+                # One-sized references can just be resolved into group
+                if child.size == 1:
+                    childname = child.name
+                    del fp[child.name]
+                    group.move(fp[child[()].item()].name, childname)
+                else:
+                    child.attrs['MATLAB_class'] = np.bytes_('cell')
             continue
 
         # Turn all children into references to make it non-scalar
         refs = fp.require_group('#refs#')
         for childname, child in group.items():
-            # Turn group into reference dataset to the group
-            if isinstance(child, h5py._hl.group.Group):
-                incr = str(len(refs.items()))
-                rf = refs.create_group(incr)
-                group.move(child, rf)
-                group[childname] = rf[childname].ref
-                continue
-
             # Skip references (done already)
-            if child.dtype == h5py.h5r.Reference:
+            if getattr(child, 'dtype', None) == h5py.h5r.Reference:
                 continue
 
-            # Turn shape and shape-less datasets into reference datasets
-            if child.shape is None:
-                # Move (copy) the dataset and create a reference to it
+            # Turn groups and shape(-less) datasets into reference datasets
+            if getattr(child, 'shape', None) is None:
+                # Move (copy) the dataset/group and create a reference to it
                 incr = str(len(refs.items()))
-                group.copy(child, refs, name=incr)
-                del group[childname]
+                group.move(child.name, '/#refs#/'+incr)
                 group[childname] = refs[incr].ref
             else:
                 # Create a new dataset without any filters
