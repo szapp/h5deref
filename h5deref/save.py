@@ -149,29 +149,45 @@ def _fixmatlabstruct(fp):  # noqa: C901
             [np.fromiter(f, '|S1') for f in fields],
             dtype=h5py.vlen_dtype(np.dtype('|S1')))[1:]
 
-        # Iterate over all immediate children to check for refs
+        # Iterate over all children to determine if it should be scalar
+        shape = set()
+        hasgroups = False
         for child in group.values():
-            if (isinstance(child, h5py._hl.dataset.Dataset) and
-                    child.dtype == h5py.h5r.Reference):
-                break
-        else:
+            if not isinstance(child, h5py._hl.dataset.Dataset):
+                hasgroups = True
+            else:
+                shape.add(child.shape)
+                if len(shape) != 1:
+                    break
+
+        # Different shapes = non-scalar: nothing to do
+        if len(shape) != 1 or (hasgroups and shape.pop() != 1):
             continue
 
-        # If there is a reference, turn all into references
+        # Turn all children into references to make it non-scalar
         refs = fp.require_group('#refs#')
         for childname, child in group.items():
-            if not isinstance(child, h5py._hl.dataset.Dataset):
+            # Turn group into reference dataset to the group
+            if isinstance(child, h5py._hl.group.Group):
+                incr = str(len(refs.items()))
+                rf = refs.create_group(incr)
+                group.move(child, rf)
+                group[childname] = rf[childname].ref
                 continue
+
+            # Skip references (done already)
             if child.dtype == h5py.h5r.Reference:
                 continue
 
+            # Turn shape and shape-less datasets into reference datasets
             if child.shape is None:
+                # Move (copy) the dataset and create a reference to it
                 incr = str(len(refs.items()))
                 group.copy(child, refs, name=incr)
                 del group[childname]
                 group[childname] = refs[incr].ref
             else:
-                # Create a new dataset (create_dataset_like does not work)
+                # Create a new dataset without any filters
                 rf = group.create_dataset('__h5dereftemp__', shape=child.shape,
                                           dtype=h5py.ref_dtype)
 
@@ -179,6 +195,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
                 fi = np.nditer(child, flags=['refs_ok', 'multi_index'],
                                itershape=child.shape)
                 for v in fi:
+                    # Create new dataset for each element with filters
                     incr = str(len(refs.items()))
                     refs.create_dataset_like(incr, child,
                                              shape=np.atleast_2d(v).shape,
