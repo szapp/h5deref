@@ -59,6 +59,7 @@ def _sortdict(par, key, val, transp=False, **kwargs):
 
 def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
     """Wrapper for adder functions"""
+    key = str(key)
     if isinstance(val, (np.ndarray, np.record, np.generic)):
         _sortarray(par, key, val, transp, **kwargs)
     elif isinstance(val, dict):
