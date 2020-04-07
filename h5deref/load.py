@@ -95,21 +95,28 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         islogical = obj.attrs.get('MATLAB_class') == b'logical'
 
         # Copy, transpose and squeeze dimensions of numpy array
-        obj = np.squeeze(obj).T if kwargs.get('transpose') else np.squeeze(obj)
-
-        # Recurse into data set
-        if obj.dtype == 'O' and obj.size:
-            fi = np.nditer(obj, flags=['refs_ok'], op_flags=['readwrite'])
-            for it in fi:
-                it[()] = load(fp, it[()], **kwargs)
-
-        # MATLAB developers are not aware of the bool type in H5
-        if islogical:
-            obj = obj.astype('bool')
-
-        # Use a single object directly
-        if obj.size == 1:
+        if kwargs.get('transpose'):
+            if obj.ndim == 2 and 1 in obj.shape:
+                obj = np.squeeze(obj)
+            else:
+                obj = obj[()].T
+        else:
             obj = obj[()]
+
+        if isinstance(obj, (np.ndarray, np.generic)):
+            # Recurse into data set
+            if obj.dtype == 'O' and obj.size:
+                fi = np.nditer(obj, flags=['refs_ok'], op_flags=['readwrite'])
+                for it in fi:
+                    it[()] = load(fp, it[()], **kwargs)
+
+            # MATLAB developers are not aware of the bool type in H5
+            if islogical:
+                obj = obj.astype('bool')
+
+            # Use a single object directly
+            if obj.size == 1:
+                obj = obj[()]
 
     elif isinstance(obj, (h5py._hl.group.Group, h5py._hl.files.File)):
 
