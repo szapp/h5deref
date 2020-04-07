@@ -154,7 +154,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
             dtype=h5py.vlen_dtype(np.dtype('|S1')))[1:]
 
         # Iterate over all children to determine if it should be scalar
-        shape = set()
+        dims = []
         hasgroups = False
         references = []
         for child in group.values():
@@ -163,10 +163,20 @@ def _fixmatlabstruct(fp):  # noqa: C901
             else:
                 if child.dtype == h5py.h5r.Reference:
                     references.append(child)
-                shape.add(child.shape)
+                if child.ndim == 2 and child.shape[1] == 1:
+                    dims.append((child.shape[0],))
+                else:
+                    dims.append(child.shape[::-1])
+                # dims.append(child.shape[::-1])
+
+        idx = 0
+        for d in zip(*dims):
+            if len(set(d)) != 1:
+                break
+            idx += 1
 
         # Different shapes = non-scalar: nothing to do
-        if len(shape) != 1 or (hasgroups and shape.pop() != 1):
+        if not idx or (hasgroups and dims[0][0] != 1):
             # In scalar structs object arrays need to be cell arrays
             for child in references:
                 # One-sized references can just be resolved into group
@@ -177,6 +187,11 @@ def _fixmatlabstruct(fp):  # noqa: C901
                 else:
                     child.attrs['MATLAB_class'] = np.bytes_('cell')
             continue
+
+        # Shared dimensions (inversed, because MATLAB transposes)
+        commondim = dims[0][:idx]
+        if len(commondim) == 1:
+            commondim += (1,)
 
         # Turn all children into references to make it non-scalar
         refs = fp.require_group('#refs#')
@@ -193,17 +208,23 @@ def _fixmatlabstruct(fp):  # noqa: C901
                 group[childname] = refs[incr].ref
             else:
                 # Create a new dataset without any filters
-                rf = group.create_dataset('__h5dereftemp__', shape=child.shape,
+                rf = group.create_dataset('__h5dereftemp__', shape=commondim,
                                           dtype=h5py.ref_dtype)
 
                 # Iterate over dataset entries
-                fi = np.nditer(child, flags=['refs_ok', 'multi_index'],
-                               itershape=child.shape)
-                for v in fi:
+                fi = np.nditer(rf, flags=['refs_ok', 'multi_index'],
+                               itershape=commondim)
+
+                for _ in fi:
+                    if child.ndim == 2 and child.shape[1] == 1:
+                        index = fi.multi_index[:idx] + (Ellipsis,)
+                    else:
+                        index = (Ellipsis,)*(idx > 0) + fi.multi_index[:idx]
+                    v = np.atleast_2d(child[index]).T
+
                     # Create new dataset for each element with filters
                     incr = str(len(refs.items()))
-                    refs.create_dataset_like(incr, child,
-                                             shape=np.atleast_2d(v).shape,
+                    refs.create_dataset_like(incr, child, shape=v.shape,
                                              chunks=None, maxshape=None)
                     refs[incr][()] = v
                     for atr_key, atr_val in child.attrs.items():
