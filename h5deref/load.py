@@ -184,13 +184,14 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         else:
             # Check for common dimensions
             dims = [a.shape for a in arrs]
-            idx = [i for i, j in enumerate(zip(*dims)) if len(set(j)) != 1]
+            idx = 0
+            for d in zip(*dims):
+                if len(set(d)) != 1:
+                    break
+                idx += 1
 
             # Are there shared dimensions between all arrays?
-            if idx or (not idx and len(set(map(len, dims))) == 1):
-                # Collapse dimensions to parent
-                idx = idx[0] if idx else len(dims[0])
-
+            if idx:
                 # Remove common dimensions from elements
                 for i in range(len(dt)):
                     shape = dt[i][2][idx:]  # Cut off common dimensions
