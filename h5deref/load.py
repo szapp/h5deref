@@ -104,6 +104,10 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
             obj = obj[()]
 
         if isinstance(obj, (np.ndarray, np.generic)):
+            # Strip h5py reference dtype
+            if obj.dtype == 'O' and obj.dtype.hasobject:
+                obj = obj.view('object')
+
             # Recurse into data set
             if obj.dtype == 'O' and obj.size:
                 fi = np.nditer(obj, flags=['refs_ok'], op_flags=['readwrite'])
