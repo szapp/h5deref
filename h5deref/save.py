@@ -140,11 +140,24 @@ def _fixmatlabstruct(fp):  # noqa: C901
     groups = []
 
     def collectgroups(name, obj):
-        if isinstance(obj, h5py._hl.group.Group) and name != '#refs#':
+        """Callback function to collect all suitable struct groups"""
+        if (isinstance(obj, h5py._hl.group.Group)
+                and name != '#refs#'
+                and obj.attrs.get('MATLAB_class', None) != b'struct'):
             groups.append(obj)
-    fp.visititems(collectgroups)
 
-    for group in groups:
+    def dynamiciterator():
+        """Dynamically reassessing groups iterator"""
+        while True:
+            fp.visititems(collectgroups)
+            if groups:
+                yield groups[0]
+            else:
+                raise StopIteration
+
+    # Iterate over all groups to make them MATLAB compatible structs
+    for group in dynamiciterator():
+        groups = []  # Reset groups for iterator
         group.attrs['MATLAB_class'] = np.bytes_('struct')
 
         # Create struct fields
@@ -153,45 +166,49 @@ def _fixmatlabstruct(fp):  # noqa: C901
         fieldnames[:] = [np.fromiter(f, '|S1') for f in group.keys()]
         group.attrs['MATLAB_fields'] = fieldnames
 
-        # Iterate over all children to determine if it should be scalar
-        dims = []
-        hasgroups = False
-        references = []
-        for child in group.values():
-            if isinstance(child, h5py._hl.group.Group):
-                hasgroups = True
-            else:
-                if child.dtype == h5py.h5r.Reference:
-                    references.append(child)
-                if child.ndim == 2 and child.shape[1] == 1:
-                    dims.append((child.shape[0],))
-                else:
-                    dims.append(child.shape[::-1])
-                # dims.append(child.shape[::-1])
+        # Recurse into groups to obtain shape (visititems not suitable)
+        def groupshape(obj):
+            if isinstance(obj, h5py._hl.group.Group):
+                # Collect shapes from children
+                dims = [groupshape(chld) for chld in obj.values()]
 
-        idx = 0
-        for d in zip(*dims):
-            if len(set(d)) != 1:
-                break
-            idx += 1
+                # Obtain first n common dimensions
+                commondim = ()
+                for d in zip(*dims):
+                    if len(set(d)) != 1:
+                        break
+                    commondim += (d[0],)
+
+                # Pass upward
+                return commondim
+            else:
+                if obj.ndim == 2 and obj.shape[1] == 1:
+                    return (obj.shape[0],)
+                else:
+                    # Reversed, because MATLAB transposes
+                    return obj.shape[::-1]
+
+        # Iterate over all children to determine if it should be scalar
+        commondim = groupshape(group)
+        idx = len(commondim)
+        if len(commondim) == 1:
+            commondim += (1,)
 
         # Different shapes = non-scalar: nothing to do
-        if not idx or (hasgroups and dims[0][0] != 1):
-            # In scalar structs object arrays need to be cell arrays
-            for child in references:
+        if not idx:
+            for child in group.values():
+                if not isinstance(child, h5py.h5r.Reference):
+                    continue
+
                 # One-sized references can just be resolved into group
                 if child.size == 1:
                     childname = child.name
                     del fp[child.name]
                     group.move(fp[child[()].item()].name, childname)
                 else:
+                    # Object arrays might need to be cell arrays
                     child.attrs['MATLAB_class'] = np.bytes_('cell')
             continue
-
-        # Shared dimensions (inversed, because MATLAB transposes)
-        commondim = dims[0][:idx]
-        if len(commondim) == 1:
-            commondim += (1,)
 
         # Turn all children into references to make it non-scalar
         refs = fp.require_group('#refs#')
@@ -200,21 +217,29 @@ def _fixmatlabstruct(fp):  # noqa: C901
             if getattr(child, 'dtype', None) == h5py.h5r.Reference:
                 continue
 
-            # Turn groups and shape(-less) datasets into reference datasets
-            if getattr(child, 'shape', None) is None:
-                # Move (copy) the dataset/group and create a reference to it
+            # Turn shape-less datasets into reference datasets (works?)
+            if (not isinstance(child, h5py._hl.group.Group)
+                    and getattr(child, 'shape', None) is None):
+                # Move the dataset and create a reference to it
                 incr = str(len(refs.items()))
                 group.move(child.name, '/#refs#/'+incr)
                 group[childname] = refs[incr].ref
+                continue
+
+            # Create a new dataset without any filters
+            rf = group.create_dataset('__h5dereftemp__', shape=commondim,
+                                      dtype=h5py.ref_dtype)
+
+            # Iterate over dataset entries
+            fi = np.nditer(rf, flags=['refs_ok', 'multi_index'],
+                           itershape=commondim)
+
+            # Differentiate between dataset and group
+            if isinstance(child, h5py._hl.group.Group):
+                # TODO: Split into individual groups by dimensions
+                del group['__h5dereftemp__']
+                continue
             else:
-                # Create a new dataset without any filters
-                rf = group.create_dataset('__h5dereftemp__', shape=commondim,
-                                          dtype=h5py.ref_dtype)
-
-                # Iterate over dataset entries
-                fi = np.nditer(rf, flags=['refs_ok', 'multi_index'],
-                               itershape=commondim)
-
                 for _ in fi:
                     if child.ndim == 2 and child.shape[1] == 1:
                         index = fi.multi_index[:idx] + (Ellipsis,)
@@ -231,10 +256,10 @@ def _fixmatlabstruct(fp):  # noqa: C901
                         refs[incr].attrs[atr_key] = atr_val
                     rf[fi.multi_index] = refs[incr].ref
 
-                # Update the group-child relationship
-                del group[childname]
-                group[childname] = group['__h5dereftemp__']
-                del group['__h5dereftemp__']
+            # Update the group-child relationship
+            del group[childname]
+            group[childname] = group['__h5dereftemp__']
+            del group['__h5dereftemp__']
 
 
 def save(fp, data, transpose=None, **kwargs):
