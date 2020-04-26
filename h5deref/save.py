@@ -148,10 +148,10 @@ def _fixmatlabstruct(fp):  # noqa: C901
         group.attrs['MATLAB_class'] = np.bytes_('struct')
 
         # Create struct fields
-        fields = ('_',) + tuple(group.keys())  # Extra element necessary
-        group.attrs['MATLAB_fields'] = np.array(
-            [np.fromiter(f, '|S1') for f in fields],
-            dtype=h5py.vlen_dtype(np.dtype('|S1')))[1:]
+        fieldnames = np.empty(len(group.keys()),
+                              dtype=h5py.vlen_dtype(np.dtype('|S1')))
+        fieldnames[:] = [np.fromiter(f, '|S1') for f in group.keys()]
+        group.attrs['MATLAB_fields'] = fieldnames
 
         # Iterate over all children to determine if it should be scalar
         dims = []
