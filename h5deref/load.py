@@ -178,6 +178,15 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                         b = np.empty(shape=(), dtype='O')  # No shape
                         b[()] = a
                         a = b
+                elif (a.dtype == 'O' and a.shape and
+                        all([isinstance(b, (np.ndarray, np.generic))
+                            for b in a]) and
+                        len(set([np.result_type(b) for b in a])) == 1):
+                    c_dt = set([np.result_type(b) for b in a]).pop()
+                    if c_dt.names:
+                        b = np.empty_like(a, c_dt.descr)
+                        b[()] = np.stack(a)
+                        a = b
                 if (np.prod(a.shape) * np.dtype(a.dtype).itemsize
                         > np.iinfo(np.int32).max):
                     # Wrap arrays with too large shape (numpy cannot handle)
@@ -222,10 +231,17 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
 
     # Resolve Python specific types
     if tp == 'list':
-        obj = (obj.tolist() if isinstance(obj, (np.ndarray, np.generic))
-               else list(obj))
+        if isinstance(obj, (np.ndarray, np.generic)):
+            obj = obj.tolist()
+        elif isinstance(obj, str):
+            obj = list([obj])
+        else:
+            obj = list(obj)
     elif tp == 'tuple':
-        obj = tuple(obj)
+        if isinstance(obj, str):
+            obj = tuple([obj])
+        else:
+            obj = tuple(obj)
     elif tp == 'range':
         obj = range(*obj)
     elif tp == 'slice':

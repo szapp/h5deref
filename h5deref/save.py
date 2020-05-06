@@ -16,12 +16,6 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
         rf = par.create_group(key, track_order=True)
         for k in val.dtype.names:
             _sortinto(rf, k, val[k], transp, **kwargs)
-    elif valasarr.dtype.kind == 'U' and transp:
-        val = np.atleast_1d(val)
-        val = val.view(np.uint32).reshape(*val.shape, -1).astype('uint16')
-        par.create_dataset(key, data=val.T, **kwargs)
-        if transp:
-            _setmatlabtype(par[key], 'U')  # valasarr.dtype not working
     elif valasarr.dtype.kind in ('O', 'U'):
         if transp:
             valasarr = np.atleast_2d(valasarr).T
@@ -33,10 +27,8 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
                        itershape=valasarr.shape)
         for v in fi:
             incr = str(len(refs.items()))
-            _sortinto(refs, incr, v[()], transp, **kwargs)  # Filters
+            _sortinto(refs, incr, v.item(), transp, **kwargs)  # Filters
             rf[fi.multi_index] = refs[incr].ref
-        if transp and valasarr.dtype.kind == 'U':
-            _setmatlabtype(par[key], valasarr.dtype)
     else:
         if valasarr.size < 2:
             kwargs = _removescalarfilters(kwargs)
@@ -96,8 +88,13 @@ def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
             par.create_dataset(key, dtype='bool')  # Empty data set
         par[key].attrs['type'] = 'NoneType'
     elif isinstance(val, str) and transp:
-        val = np.fromiter(map(ord, val), dtype='uint16')
-        _sortarray(par, key, val, transp, **kwargs)
+        if len(val) == 0:
+            _sortarray(par, key, np.zeros(2, dtype='uint64'))
+            _setmatlabtype(par[key], 0)
+        else:
+            val = np.fromiter(map(ord, val), dtype='uint16')
+            val = np.atleast_2d(val)
+            par.create_dataset(key, data=val.T, **kwargs)
         _setmatlabtype(par[key], np.dtype(np.str_))
     elif transp:
         _sortarray(par, key, np.asarray(val), transp, **kwargs)
@@ -166,6 +163,10 @@ def _fixmatlabstruct(fp):  # noqa: C901
         fieldnames[:] = [np.fromiter(f, '|S1') for f in group.keys()]
         group.attrs['MATLAB_fields'] = fieldnames
 
+        # Exclude groups that are already references (double check this)
+        if group.name.startswith('/#refs#'):
+            continue
+
         # Recurse into groups to obtain shape (visititems not suitable)
         def groupshape(obj):
             """Determine common shape"""
@@ -232,6 +233,8 @@ def _fixmatlabstruct(fp):  # noqa: C901
                            itershape=commondim)
             ndim = len(commondim)
 
+            # Datasets are just turned into references, groups are
+            # split into smaller groups referenced by datasets
             if isinstance(child, h5py._hl.dataset.Dataset):
                 for _ in fi:
                     # Obtain index for dataset
@@ -283,11 +286,10 @@ def _fixmatlabstruct(fp):  # noqa: C901
                                                            chunks=None,
                                                            maxshape=None)
                             refs[incr][ckdname][()] = v
-                            for atr_key, atr_val in ckd.attrs.items():
-                                refs[incr][ckdname].attrs[atr_key] = atr_val
 
-                    for atr_key, atr_val in child.attrs.items():
-                        refs[incr].attrs[atr_key] = atr_val
+                        for atr_key, atr_val in ckd.attrs.items():
+                            refs[incr][ckdname].attrs[atr_key] = atr_val
+
                     rf[fi.multi_index] = refs[incr].ref
 
             # Update the group-child relationship
