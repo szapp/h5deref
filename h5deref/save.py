@@ -139,7 +139,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
     def collectgroups(name, obj):
         """Callback function to collect all suitable struct groups"""
         if (isinstance(obj, h5py._hl.group.Group)
-                and name != '#refs#'
+                and not name.startswith('#refs#')
                 and obj.attrs.get('MATLAB_class', None) != b'struct'):
             groups.append(obj)
 
@@ -162,10 +162,6 @@ def _fixmatlabstruct(fp):  # noqa: C901
                               dtype=h5py.vlen_dtype(np.dtype('|S1')))
         fieldnames[:] = [np.fromiter(f, '|S1') for f in group.keys()]
         group.attrs['MATLAB_fields'] = fieldnames
-
-        # Exclude groups that are already references (double check this)
-        if group.name.startswith('/#refs#'):
-            continue
 
         # Recurse into groups to obtain shape (visititems not suitable)
         def groupshape(obj):
