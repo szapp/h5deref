@@ -151,7 +151,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
         while True:
             fp.visititems(collectgroups)
             if groups:
-                yield groups[0]
+                yield groups[-1]  # Start with last
             else:
                 raise StopIteration
 
@@ -168,6 +168,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
 
         # Recurse into groups to obtain shape (visititems not suitable)
         def groupshape(obj):
+            """Determine common shape"""
             if isinstance(obj, h5py._hl.group.Group):
                 # Collect shapes from children
                 dims = [groupshape(chld) for chld in obj.values()]
@@ -212,18 +213,14 @@ def _fixmatlabstruct(fp):  # noqa: C901
 
         # Turn all children into references to make it non-scalar
         refs = fp.require_group('#refs#')
-        for childname, child in group.items():
-            # Skip references (done already)
-            if getattr(child, 'dtype', None) == h5py.h5r.Reference:
-                continue
 
-            # Turn shape-less datasets into reference datasets (works?)
-            if (not isinstance(child, h5py._hl.group.Group)
-                    and getattr(child, 'shape', None) is None):
-                # Move the dataset and create a reference to it
-                incr = str(len(refs.items()))
-                group.move(child.name, '/#refs#/'+incr)
-                group[childname] = refs[incr].ref
+        # Simple loop over all group items. Assumes there are no more
+        # groups within this group that haven't been resolved already.
+        # Reshape a dataset/group/reference and turn it into reference
+        for childname, child in group.items():
+            # Skip references with correct shape
+            if (getattr(child, 'dtype', None) == h5py.h5r.Reference
+                    and getattr(child, 'shape', ()) == commondim):
                 continue
 
             # Create a new dataset without any filters
@@ -233,25 +230,62 @@ def _fixmatlabstruct(fp):  # noqa: C901
             # Iterate over dataset entries
             fi = np.nditer(rf, flags=['refs_ok', 'multi_index'],
                            itershape=commondim)
+            ndim = len(commondim)
 
-            # Differentiate between dataset and group
-            if isinstance(child, h5py._hl.group.Group):
-                # TODO: Split into individual groups by dimensions
-                del group['__h5dereftemp__']
-                continue
-            else:
+            if isinstance(child, h5py._hl.dataset.Dataset):
                 for _ in fi:
+                    # Obtain index for dataset
                     if child.ndim == 2 and child.shape[1] == 1:
-                        index = fi.multi_index[:idx] + (Ellipsis,)
+                        index = fi.multi_index[:ndim-1] + (Ellipsis,)
                     else:
-                        index = (Ellipsis,)*(idx > 0) + fi.multi_index[:idx]
-                    v = np.atleast_2d(child[index]).T
+                        index = ((Ellipsis,)*(ndim > 0) +
+                                 fi.multi_index[:ndim-1])
+
+                    # Differentiate between data and reference
+                    if child.dtype == h5py.h5r.Reference:
+                        v = np.atleast_2d(fp[child.name][index]).T
+                    else:
+                        v = np.atleast_2d(child[index]).T
 
                     # Create new dataset for each element with filters
                     incr = str(len(refs.items()))
                     refs.create_dataset_like(incr, child, shape=v.shape,
                                              chunks=None, maxshape=None)
                     refs[incr][()] = v
+                    for atr_key, atr_val in child.attrs.items():
+                        refs[incr].attrs[atr_key] = atr_val
+                    rf[fi.multi_index] = refs[incr].ref
+            else:
+                for _ in fi:
+                    # Create new group for each split
+                    incr = str(len(refs.items()))
+                    refs.create_group(incr)
+
+                    for ckdname, ckd in child.items():
+                        # Leave it like this, until needed
+                        if isinstance(ckd, h5py._hl.group.Group):
+                            raise NotImplementedError('Nested group')
+
+                        # Store datasets
+                        if ckd.ndim == 2 and ckd.shape[1] == 1:
+                            index = fi.multi_index[:ndim-1] + (Ellipsis,)
+                        else:
+                            index = ((Ellipsis,)*(ndim > 0)
+                                     + fi.multi_index[:ndim-1])
+
+                        if ckd.dtype == h5py.h5r.Reference:
+                            v = np.atleast_2d(fp[ckd.name][index]).T
+                            refs[incr][ckdname] = v
+                        else:
+                            v = np.atleast_2d(ckd[index]).T
+                            refs[incr].create_dataset_like(ckdname, ckd,
+                                                           shape=v.shape,
+                                                           chunks=None,
+                                                           maxshape=None)
+                            refs[incr][ckdname][()] = v
+                            for atr_key, atr_val in ckd.attrs.items():
+                                refs[incr][ckdname].attrs[atr_key] = atr_val
+
                     for atr_key, atr_val in child.attrs.items():
                         refs[incr].attrs[atr_key] = atr_val
                     rf[fi.multi_index] = refs[incr].ref
