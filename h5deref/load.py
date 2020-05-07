@@ -209,7 +209,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                 idx += 1
 
             # Are there shared dimensions between all arrays?
-            if idx:
+            if idx and len(dims) > 1:
                 # Remove common dimensions from elements
                 for i in range(len(dt)):
                     shape = dt[i][2][idx:]  # Cut off common dimensions
