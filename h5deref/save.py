@@ -235,10 +235,10 @@ def _fixmatlabstruct(fp):  # noqa: C901
                 for _ in fi:
                     # Obtain index for dataset
                     if child.ndim == 2 and child.shape[1] == 1:
-                        index = fi.multi_index[:ndim-1] + (Ellipsis,)
+                        index = fi.multi_index[:ndim-1][::-1] + (Ellipsis,)
                     else:
                         index = ((Ellipsis,)*(ndim > 0) +
-                                 fi.multi_index[:ndim-1])
+                                 fi.multi_index[:ndim-1][::-1])
 
                     # Differentiate between data and reference
                     if child.dtype == h5py.h5r.Reference:
@@ -276,10 +276,10 @@ def _fixmatlabstruct(fp):  # noqa: C901
 
                         # Obtain index for dataset
                         if ckd.ndim == 2 and ckd.shape[1] == 1:
-                            index = fi.multi_index[:ndim-1] + (Ellipsis,)
+                            index = fi.multi_index[:ndim-1][::-1] + (Ellipsis,)
                         else:
                             index = ((Ellipsis,)*(ndim > 0)
-                                     + fi.multi_index[:ndim-1])
+                                     + fi.multi_index[:ndim-1][::-1])
 
                         # Differentiate between data and reference
                         if ckd.dtype == h5py.h5r.Reference:
