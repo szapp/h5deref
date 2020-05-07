@@ -242,15 +242,23 @@ def _fixmatlabstruct(fp):  # noqa: C901
 
                     # Differentiate between data and reference
                     if child.dtype == h5py.h5r.Reference:
-                        v = np.atleast_2d(fp[child.name][index]).T
+                        v = fp[child.name][index]
                     else:
-                        v = np.atleast_2d(child[index]).T
+                        v = child[index]
 
-                    # Create new dataset for each element with filters
+                    # Fix dimensions
+                    if v.ndim < 2:
+                        v = np.atleast_2d(v).T
+                    else:
+                        v = v[()]
+
+                    # Create dataset for each element with filters
                     incr = str(len(refs.items()))
                     refs.create_dataset_like(incr, child, shape=v.shape,
                                              chunks=None, maxshape=None)
                     refs[incr][()] = v
+
+                    # Copy attributes
                     for atr_key, atr_val in child.attrs.items():
                         refs[incr].attrs[atr_key] = atr_val
                     rf[fi.multi_index] = refs[incr].ref
@@ -258,40 +266,58 @@ def _fixmatlabstruct(fp):  # noqa: C901
                 for _ in fi:
                     # Create new group for each split
                     incr = str(len(refs.items()))
-                    refs.create_group(incr)
+                    refs.create_group(incr, track_order=True)
 
+                    # Iterate over group children
                     for ckdname, ckd in child.items():
                         # Leave it like this, until needed
                         if isinstance(ckd, h5py._hl.group.Group):
                             raise NotImplementedError('Nested group')
 
-                        # Store datasets
+                        # Obtain index for dataset
                         if ckd.ndim == 2 and ckd.shape[1] == 1:
                             index = fi.multi_index[:ndim-1] + (Ellipsis,)
                         else:
                             index = ((Ellipsis,)*(ndim > 0)
                                      + fi.multi_index[:ndim-1])
 
+                        # Differentiate between data and reference
                         if ckd.dtype == h5py.h5r.Reference:
-                            v = np.atleast_2d(fp[ckd.name][index]).T
-                            refs[incr][ckdname] = v
+                            v = fp[ckd.name][index]
                         else:
-                            v = np.atleast_2d(ckd[index]).T
-                            refs[incr].create_dataset_like(ckdname, ckd,
-                                                           shape=v.shape,
-                                                           chunks=None,
-                                                           maxshape=None)
-                            refs[incr][ckdname][()] = v
+                            v = ckd[index]
 
+                        # Fix dimensions
+                        if v.ndim < 2:
+                            v = np.atleast_2d(v).T
+                        else:
+                            v = v[()]
+
+                        # Create dataset for each element with filters
+                        refs[incr].create_dataset_like(ckdname, ckd,
+                                                       dtype=v.dtype,
+                                                       shape=v.shape,
+                                                       chunks=None,
+                                                       maxshape=None)
+                        refs[incr][ckdname][()] = v
+
+                        # Copy attributes
                         for atr_key, atr_val in ckd.attrs.items():
                             refs[incr][ckdname].attrs[atr_key] = atr_val
 
                     rf[fi.multi_index] = refs[incr].ref
 
-            # Update the group-child relationship
-            del group[childname]
-            group[childname] = group['__h5dereftemp__']
-            del group['__h5dereftemp__']
+            # Re-add ALL children to maintain tracking order
+            for ckdname, ckd in group.items():
+                if ckdname == childname:
+                    del group[childname]
+                    group[childname] = group['__h5dereftemp__']
+                    del group['__h5dereftemp__']
+                elif ckdname != '__h5dereftemp__':
+                    a = group[ckdname]
+                    del group[ckdname]
+                    group[ckdname] = a
+                    del a
 
 
 def save(fp, data, transpose=None, **kwargs):

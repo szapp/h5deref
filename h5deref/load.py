@@ -177,22 +177,19 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                     else:
                         b = np.empty(shape=(), dtype='O')  # No shape
                         b[()] = a
-                        a = b
+                        a, b = b, None
                 elif (a.dtype == 'O' and a.shape and
                         all([isinstance(b, (np.ndarray, np.generic))
                             for b in a]) and
                         len(set([np.result_type(b) for b in a])) == 1):
-                    c_dt = set([np.result_type(b) for b in a]).pop()
-                    if c_dt.names:
-                        b = np.empty_like(a, c_dt.descr)
-                        b[()] = np.stack(a)
-                        a = b
+                    # Collapse nested structured arrays
+                    a = np.stack(a)
                 if (np.prod(a.shape) * np.dtype(a.dtype).itemsize
                         > np.iinfo(np.int32).max):
                     # Wrap arrays with too large shape (numpy cannot handle)
                     b = np.empty(shape=(), dtype='O')  # No shape
                     b[()] = a
-                    a = b
+                    a, b = b, None
 
                 dt.append((name, a.dtype, a.shape))
 
