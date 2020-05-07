@@ -181,6 +181,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                 elif (a.dtype == 'O' and a.shape and
                         all([isinstance(b, (np.ndarray, np.generic))
                             for b in a]) and
+                        len(set([b.shape for b in a])) == 1 and
                         len(set([np.result_type(b) for b in a])) == 1):
                     # Collapse nested structured arrays
                     a = np.stack(a)
