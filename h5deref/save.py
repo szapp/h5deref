@@ -139,7 +139,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
     def collectgroups(name, obj):
         """Callback function to collect all suitable struct groups"""
         if (isinstance(obj, h5py._hl.group.Group)
-                and not name.startswith('#refs#')
+                and name != '#refs#'
                 and obj.attrs.get('MATLAB_class', None) != b'struct'):
             groups.append(obj)
 
@@ -189,6 +189,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
         # Iterate over all children to determine if it should be scalar
         commondim = groupshape(group)
         idx = len(commondim)
+        commondim = commondim[::-1]
         if len(commondim) == 1:
             commondim += (1,)
 
@@ -227,7 +228,6 @@ def _fixmatlabstruct(fp):  # noqa: C901
             # Iterate over dataset entries
             fi = np.nditer(rf, flags=['refs_ok', 'multi_index'],
                            itershape=commondim)
-            ndim = len(commondim)
 
             # Datasets are just turned into references, groups are
             # split into smaller groups referenced by datasets
@@ -235,10 +235,9 @@ def _fixmatlabstruct(fp):  # noqa: C901
                 for _ in fi:
                     # Obtain index for dataset
                     if child.ndim == 2 and child.shape[1] == 1:
-                        index = fi.multi_index[:ndim-1][::-1] + (Ellipsis,)
+                        index = fi.multi_index[:idx] + (Ellipsis,)
                     else:
-                        index = ((Ellipsis,)*(ndim > 0) +
-                                 fi.multi_index[:ndim-1][::-1])
+                        index = (Ellipsis,) + fi.multi_index[:idx]
 
                     # Differentiate between data and reference
                     if child.dtype == h5py.h5r.Reference:
@@ -263,10 +262,19 @@ def _fixmatlabstruct(fp):  # noqa: C901
                         refs[incr].attrs[atr_key] = atr_val
                     rf[fi.multi_index] = refs[incr].ref
             else:
+                # Get the group names
+                fieldnames = np.empty(len(child.keys()),
+                                      dtype=h5py.vlen_dtype(np.dtype('|S1')))
+                fieldnames[:] = [np.fromiter(f, '|S1') for f in child.keys()]
+
                 for _ in fi:
                     # Create new group for each split
                     incr = str(len(refs.items()))
                     refs.create_group(incr, track_order=True)
+
+                    # Add struct info
+                    refs[incr].attrs['MATLAB_class'] = np.bytes_('struct')
+                    refs[incr].attrs['MATLAB_fields'] = fieldnames
 
                     # Iterate over group children
                     for ckdname, ckd in child.items():
@@ -276,10 +284,9 @@ def _fixmatlabstruct(fp):  # noqa: C901
 
                         # Obtain index for dataset
                         if ckd.ndim == 2 and ckd.shape[1] == 1:
-                            index = fi.multi_index[:ndim-1][::-1] + (Ellipsis,)
+                            index = fi.multi_index[:idx] + (Ellipsis,)
                         else:
-                            index = ((Ellipsis,)*(ndim > 0)
-                                     + fi.multi_index[:ndim-1][::-1])
+                            index = (Ellipsis,) + fi.multi_index[:idx]
 
                         # Differentiate between data and reference
                         if ckd.dtype == h5py.h5r.Reference:
