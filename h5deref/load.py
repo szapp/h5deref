@@ -178,13 +178,39 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                         b = np.empty(shape=(), dtype='O')  # No shape
                         b[()] = a
                         a, b = b, None
-                elif (a.dtype == 'O' and a.shape and
-                        all([isinstance(b, (np.ndarray, np.generic))
-                            for b in a]) and
-                        len(set([b.shape for b in a])) == 1 and
-                        len(set([np.result_type(b) for b in a])) == 1):
-                    # Collapse nested structured arrays
-                    a = np.stack(a)
+                elif a.dtype == 'O' and a.shape:
+                    af = a.ravel()  # Lazy way of np.nditer
+                    if all([isinstance(b, (np.ndarray, np.generic))
+                            for b in af]):
+                        # Collapse nested structured arrays
+                        c_names = set([b.dtype.names for b in af])
+                        if len(set([(b.shape, b.dtype) for b in af])) == 1:
+                            # All elements share dtype and shape
+                            a = np.stack(a)
+                        elif c_names != {None} and len(c_names) == 1:
+                            # Elements share dtype by different shape
+                            c_names = c_names.pop()
+                            c_shps = [set([b[n].shape for b in af])
+                                      for n in c_names]
+                            c_dt = [np.result_type(*[b[n] for b in af])
+                                    for n in c_names]
+
+                            # Contract differing dtypes to object
+                            dtt = []
+                            for n, s, t in zip(c_names, c_shps, c_dt):
+                                if len(s) != 1:
+                                    dtt.append((n, 'O'))
+                                else:
+                                    dtt.append((n, t, s.pop()))
+
+                            # Construct and fill new array
+                            b = np.empty_like(a, dtt)
+                            fi = np.nditer((a, b), flags=['refs_ok'],
+                                           op_flags=['readwrite'])
+                            for ia, ib in fi:
+                                for n in c_names:
+                                    ib[()][n] = ia[()][n]
+                            a, af, b = b, None, None
                 if (np.prod(a.shape) * np.dtype(a.dtype).itemsize
                         > np.iinfo(np.int32).max):
                     # Wrap arrays with too large shape (numpy cannot handle)
