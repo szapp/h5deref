@@ -149,7 +149,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                 continue
 
             # Add current item if specified or if no specifications
-            for key in list(kwargs.get('keys', fullpath)):
+            for key in np.atleast_1d(kwargs.get('keys', fullpath)).tolist():
                 key = ('/' + key.lstrip('/'))[:len(fullpath)]
                 if fullpath.startswith(key):
                     items[name] = val

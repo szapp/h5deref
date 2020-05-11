@@ -377,5 +377,5 @@ def save(fp, data, transpose=None, **kwargs):
         for key, val in data.items():
             _sortinto(fp, key, val, transpose, **kwargs)
 
-        if transpose:
+        if fp.filename.lower().endswith('.mat'):
             _fixmatlabstruct(fp)
