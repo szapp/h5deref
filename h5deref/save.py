@@ -17,18 +17,25 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
         for k in val.dtype.names:
             _sortinto(rf, k, val[k], transp, **kwargs)
     elif valasarr.dtype.kind in ('O', 'U'):
-        if transp:
-            valasarr = np.atleast_2d(valasarr).T
-        rf = par.create_dataset(key, shape=valasarr.shape,
-                                dtype=h5py.ref_dtype,
-                                **_removescalarfilters(kwargs))
-        refs = par.file.require_group('#refs#')
-        fi = np.nditer(valasarr, flags=['refs_ok', 'multi_index'],
-                       itershape=valasarr.shape)
-        for v in fi:
-            incr = str(len(refs.items()))
-            _sortinto(refs, incr, v.item(), transp, **kwargs)  # Filters
-            rf[fi.multi_index] = refs[incr].ref
+        if valasarr.size == 0 and transp:
+            _sortarray(par, key, np.zeros(2, dtype='uint64'))
+            _setmatlabtype(par[key], 0)  # To zero
+            _setmatlabtype(par[key], valasarr.dtype)  # Keep dtype
+        elif valasarr.size == 0:
+            _sortarray(par, key, np.empty(0))
+        else:
+            if transp:
+                valasarr = np.atleast_2d(valasarr).T
+            rf = par.create_dataset(key, shape=valasarr.shape,
+                                    dtype=h5py.ref_dtype,
+                                    **_removescalarfilters(kwargs))
+            refs = par.file.require_group('#refs#')
+            fi = np.nditer(valasarr, flags=['refs_ok', 'multi_index'],
+                           itershape=valasarr.shape)
+            for v in fi:
+                incr = str(len(refs.items()))
+                _sortinto(refs, incr, v.item(), transp, **kwargs)  # Filters
+                rf[fi.multi_index] = refs[incr].ref
     else:
         if valasarr.size < 2:
             kwargs = _removescalarfilters(kwargs)
@@ -180,6 +187,8 @@ def _fixmatlabstruct(fp):  # noqa: C901
                 # Pass upward
                 return commondim
             else:
+                if 'MATLAB_empty' in obj.attrs:
+                    return (-np.random.randint(100),)  # Make non-scalar
                 if obj.ndim == 2 and obj.shape[1] == 1:
                     return (obj.shape[0],)
                 else:
