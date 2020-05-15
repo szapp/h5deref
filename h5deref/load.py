@@ -76,7 +76,11 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
             if obj.attrs.get('MATLAB_class') == b'char':
                 obj = ''
             else:
-                obj = np.empty(0)
+                # Recover corresponding native type
+                dtt = obj.attrs.get('MATLAB_class', b'')
+                dtt = np.sctypeDict.get(dtt.decode(),
+                                        {b'logical': 'bool'}.get(dtt))
+                obj = np.empty(0, dtype=dtt)
     else:
         tp = None
 
