@@ -89,7 +89,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         if obj.shape is None:
             obj = None
         elif obj.attrs.get('MATLAB_class') == b'char':
-            if obj.shape[1] == 1:
+            if obj.shape == (1, 1):
                 obj = ''.join(map(chr, obj[()]))
             else:
                 obj = [''.join(map(chr, ll)) for ll in obj[()].T]
