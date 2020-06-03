@@ -11,7 +11,11 @@ __all__ = [
 
 def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
     """Add lists, numpy arrays, and numpy record arrays"""
-    valasarr = np.asarray(val)
+    try:
+        ragged = len(set(np.result_type(d) for d in val)) > 1
+    except TypeError:
+        ragged = False
+    valasarr = np.asarray(val, dtype='O' if ragged else None)
     if valasarr.dtype.names:
         rf = par.create_group(key, track_order=True)
         for k in val.dtype.names:
