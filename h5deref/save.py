@@ -157,7 +157,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
             if groups:
                 yield groups[-1]  # Start with last
             else:
-                raise StopIteration
+                return
 
     # Iterate over all groups to make them MATLAB compatible structs
     for group in dynamiciterator():
