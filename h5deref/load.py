@@ -154,8 +154,9 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
 
             # Add current item if specified or if no specifications
             for key in np.atleast_1d(kwargs.get('keys', fullpath)).tolist():
-                key = ('/' + key.lstrip('/'))[:len(fullpath)]
-                if fullpath.startswith(key):
+                key = '/' + key.lstrip('/') + '/'
+                key = key[:len(fullpath) + 1]
+                if (fullpath + '/').startswith(key):
                     items[name] = val
                     break
 
