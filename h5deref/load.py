@@ -124,7 +124,9 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
 
             # Use a single object directly
             if obj.size == 1:
-                obj = obj[()]
+                # Save some data types from greedy numpy when passing up
+                if not isinstance(obj[()], (list, tuple, range)):
+                    obj = obj[()]
 
     elif isinstance(obj, (h5py._hl.group.Group, h5py._hl.files.File)):
 
