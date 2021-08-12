@@ -193,12 +193,43 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                             # All elements share dtype and shape
                             a = np.stack(a)
                         elif c_names != {None} and len(c_names) == 1:
-                            # Elements share dtype by different shape
+                            # Elements share dtype but different shape
                             c_names = c_names.pop()
                             c_shps = [set([b[n].shape for b in af])
                                       for n in c_names]
-                            c_dt = [np.result_type(*[b[n] for b in af])
-                                    for n in c_names]
+
+                            # Somehow dtype.isbuiltin is not reliable
+                            try:
+                                # Simple (builtin) data types
+                                c_dt = [np.result_type(*[b[n] for b in af])
+                                        for n in c_names]
+                            except TypeError:
+                                # Structured data types
+                                c_dt = ['O' for n in c_names]  # Fall-back
+
+                                # Check for matching structured names
+                                s_names = set([tuple(set([b[n].dtype.names
+                                                          for b in af]))
+                                               for n in c_names])
+
+                                if s_names != {(None,)} and len(s_names) == 1:
+                                    # Elements share the same name
+                                    s_names = s_names.pop()[0]
+
+                                    c_dt = []
+                                    for s in s_names:
+                                        s_st = set([tuple(set([(b[n][s].dtype,
+                                                                b[n][s].shape)
+                                                               for b in af]))
+                                                    for n in c_names]).pop()
+                                        if len(s_st) == 1:
+                                            s_st = s_st[0]
+                                            c_dt.append((s, s_st[0],
+                                                        s_st[1]))
+                                        else:
+                                            c_dt.append((s, 'O', ()))
+
+                                    c_dt = (c_dt, c_dt)
 
                             # Contract differing dtypes to object
                             dtt = []
@@ -255,6 +286,23 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                     name = d[0]
                     obj[name] = arr
             else:
+                # Collapse partially matching structured data types
+                c_names = set([d[1].names for d in dt])
+                if c_names != {None} and len(c_names) == 1:
+                    c_names = c_names.pop()
+                    c_type = [set([d[1].fields[n][0].base for d in dt])
+                              for n in c_names]
+                    c_shps = [set([d[1].fields[n][0].shape for d in dt])
+                              for n in c_names]
+                    ndt = []
+                    for (c_n, c_t, c_s) in zip(c_names, c_type, c_shps):
+                        if len(c_t) == 1 and len(c_s) == 1:
+                            ndt.append((c_n, c_t.pop(), c_s.pop()))
+                        else:
+                            ndt.append((c_n, 'O', ()))
+                    for i in range(len(dt)):
+                        dt[i] = (dt[i][0], ndt, dt[i][2])
+
                 # Size-less record
                 obj = np.rec.fromarrays(arrs, dtype=np.dtype(dt))
 
