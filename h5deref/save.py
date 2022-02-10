@@ -15,7 +15,12 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
         ragged = len(set(np.result_type(d) for d in val)) > 1
     except TypeError:
         ragged = False
-    valasarr = np.asarray(val, dtype='O' if ragged else None)
+    try:
+        valasarr = np.asarray(val, dtype='O' if ragged else None)
+    except ValueError:
+        # Well, broadcast it manually then
+        valasarr = np.empty(len(val), dtype='O')
+        valasarr[:] = val
     if valasarr.dtype.names:
         rf = par.create_group(key, track_order=True)
         for k in val.dtype.names:
