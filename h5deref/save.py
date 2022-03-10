@@ -106,12 +106,12 @@ def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
     elif isinstance(val, str) and transp:
         if len(val) == 0:
             _sortarray(par, key, np.zeros(2, dtype='uint64'))
-            _setmatlabtype(par[key], 0)
+            _setmatlabtype(par[key], 0)  # To zero
         else:
             val = np.fromiter(map(ord, val), dtype='uint16')
             val = np.atleast_2d(val)
             par.create_dataset(key, data=val.T, **kwargs)
-        _setmatlabtype(par[key], np.dtype(np.str_))
+        _setmatlabtype(par[key], np.dtype(np.str_))  # Keep dtype
     elif transp:
         _sortarray(par, key, np.asarray(val), transp, **kwargs)
     else:
@@ -212,7 +212,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
             commondim += (1,)
 
         # Different shapes = non-scalar: nothing to do
-        if not idx:
+        if not idx or len(group.keys()) == 1:
             for child in group.values():
                 if not isinstance(child, h5py.h5r.Reference):
                     continue
