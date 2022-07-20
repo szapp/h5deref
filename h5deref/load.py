@@ -281,7 +281,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
 
                 # Create empty array with first x common dimensions
                 obj = np.empty(dims[0][:idx],
-                               dtype=np.dtype(dt)).view(np.recarray)
+                               dtype=np.dtype(dt)).view(recarray)
 
                 # Fill data to match the common dimensions
                 for arr, d in zip(arrs, dt):
@@ -306,7 +306,8 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                         dt[i] = (dt[i][0], ndt, dt[i][2])
 
                 # Size-less record
-                obj = np.rec.fromarrays(arrs, dtype=np.dtype(dt))
+                obj = np.rec.fromarrays(arrs,
+                                        dtype=np.dtype(dt)).view(recarray)
 
     # Resolve Python specific types
     if tp == 'list':
@@ -329,3 +330,25 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         obj = None
 
     return obj
+
+
+class recarray(np.recarray):
+    """
+    Numpy recarray class with indexing scalars as Python objects
+    """
+    def __getattribute__(self, attr):
+        try:
+            return object.__getattribute__(self, attr)
+        except AttributeError:  # attr must be a fieldname
+            pass
+
+        r = super(recarray, self).__getattribute__(attr)
+        if isinstance(r, np.ndarray) and r.ndim == 0 and not r.dtype.names:
+            r = r.item()
+        return r
+
+    def __getitem__(self, indx):
+        r = super(recarray, self).__getitem__(indx)
+        if isinstance(r, np.ndarray) and r.ndim == 0 and not r.dtype.names:
+            r = r.item()
+        return r
