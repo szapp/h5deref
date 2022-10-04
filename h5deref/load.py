@@ -186,7 +186,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                         b[()] = a
                         a, b = b, None
                 elif a.dtype == 'O' and a.shape:
-                    af = a.ravel()  # Lazy way of np.nditer
+                    af = a.reshape(-1)  # Lazy way of np.nditer
                     if all([isinstance(b, (np.ndarray, np.generic))
                             for b in af]):
                         # Collapse nested structured arrays
@@ -197,7 +197,10 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                         elif c_names != {None} and len(c_names) == 1:
                             # Elements share dtype but different shape
                             c_names = c_names.pop()
-                            c_shps = [set([b[n].shape for b in af])
+                            c_shps = [set([b[n].shape
+                                          if isinstance(b[n], np.ndarray)
+                                          else ()
+                                          for b in af])
                                       for n in c_names]
 
                             # Somehow dtype.isbuiltin is not reliable
@@ -210,9 +213,12 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                                 c_dt = ['O' for n in c_names]  # Fall-back
 
                                 # Check for matching structured names
-                                s_names = set([tuple(set([b[n].dtype.names
-                                                          for b in af]))
-                                               for n in c_names])
+                                s_names = set(
+                                    [tuple(set([b[n].dtype.names
+                                                if isinstance(b[n], np.ndarray)
+                                                else None
+                                                for b in af]))
+                                     for n in c_names])
 
                                 if s_names != {(None,)} and len(s_names) == 1:
                                     # Elements share the same name
@@ -312,8 +318,11 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
     # Resolve Python specific types
     if tp == 'list':
         if isinstance(obj, (np.ndarray, np.generic)):
-            obj = obj.tolist()
-        elif isinstance(obj, str):
+            if obj.shape != ():
+                obj = obj.tolist()
+            else:
+                obj = list([obj.tolist()])
+        elif isinstance(obj, (str, int)):
             obj = list([obj])
         else:
             obj = list(obj)
