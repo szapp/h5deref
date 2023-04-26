@@ -2,6 +2,7 @@
 Reading functions
 """
 import h5py
+from importlib import import_module
 import numpy as np
 
 __all__ = [
@@ -71,13 +72,16 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
 
     # Restore Python specific data type attribute
     if isinstance(obj, (h5py._hl.dataset.Dataset, h5py._hl.group.Group)):
-        tp = obj.attrs.get('type')
+        tp = obj.attrs.get('type', None)
+        tm = obj.attrs.get('type_module', None)
+        tn = obj.attrs.get('type_name', None)
+        tc = obj.attrs.get('MATLAB_class', None)
         if obj.attrs.get('MATLAB_empty'):
-            if obj.attrs.get('MATLAB_class') == b'char':
+            if tc == b'char':
                 obj = ''
             else:
                 # Recover corresponding native type
-                dtt = obj.attrs.get('MATLAB_class', b'')
+                dtt = tc or b''
                 dtt = np.sctypeDict.get(dtt.decode(),
                                         {b'logical': 'bool'}.get(dtt))
                 obj = np.empty(0, dtype=dtt)
@@ -88,7 +92,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
     if isinstance(obj, h5py._hl.dataset.Dataset):
         if obj.shape is None:
             obj = None
-        elif obj.attrs.get('MATLAB_class') == b'char':
+        elif tc == b'char':
             if obj.ndim == 2 and obj.shape[1] == 1:
                 obj = ''.join(map(chr, obj[:, 0]))
             else:
@@ -96,12 +100,21 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
 
     # Recurse into datasets and groups
     if isinstance(obj, h5py._hl.dataset.Dataset):
-        islogical = obj.attrs.get('MATLAB_class') == b'logical'
+        islogical = tc == b'logical'
 
         # Copy, transpose and squeeze dimensions of numpy array
         if kwargs.get('transpose'):
             if obj.ndim == 2 and 1 in obj.shape:
+                singleton = obj.shape == (1, 1) and tp == 'ndarray'
                 obj = np.squeeze(obj)
+                # if singleton:
+                #     obj = np.atleast_1d(obj)
+
+                # if tc == b'struct':
+                #     print('got one!')
+
+                # if tp == 'ndarray':
+                #     obj = np.atleast_1d(obj)
             else:
                 obj = obj[()].T
         else:
@@ -126,6 +139,8 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
             if obj.size == 1:
                 # Save some data types from greedy numpy when passing up
                 if not isinstance(obj[()], (list, tuple, range)):
+                    # if tp == 'ndarray' and obj.shape == (1,):
+                    #     print('MAKES A DIFFERENCE!')
                     obj = obj[()]
 
     elif isinstance(obj, (h5py._hl.group.Group, h5py._hl.files.File)):
@@ -283,6 +298,8 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                 # Remove common dimensions from elements
                 for i in range(len(dt)):
                     shape = dt[i][2][idx:]  # Cut off common dimensions
+                    # if shape == (1,) and kwargs.get('transpose'):
+                    #     shape = ()
                     dt[i] = dt[i][:2] + (shape,)  # Stitch back together
 
                 # Create empty array with first x common dimensions
@@ -293,6 +310,7 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                 for arr, d in zip(arrs, dt):
                     name = d[0]
                     obj[name] = arr
+                    # obj[name] = arr.reshape(-1 if d[2] == () else d[2])
             else:
                 # Collapse partially matching structured data types
                 c_names = set([d[1].names for d in dt])
@@ -311,6 +329,12 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                     for i in range(len(dt)):
                         dt[i] = (dt[i][0], ndt, dt[i][2])
 
+                # # Throw out singleton dimensions
+                # for i in range(len(dt)):
+                #     sdtt = tuple(sdt for sdt in dt[i][2] if sdt != 1)
+                #     dt[i] = (dt[i][0], dt[i][1], sdtt)
+                #     arrs[i] = np.squeeze(arrs[i])
+
                 # Size-less record
                 obj = np.rec.fromarrays(arrs,
                                         dtype=np.dtype(dt)).view(recarray)
@@ -322,12 +346,12 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
                 obj = obj.tolist()
             else:
                 obj = list([obj.tolist()])
-        elif isinstance(obj, (str, int)):
+        elif isinstance(obj, (str, int, float, bool, type(None))):
             obj = list([obj])
         else:
             obj = list(obj)
     elif tp == 'tuple':
-        if isinstance(obj, str):
+        if isinstance(obj, (str, int, float, bool, type(None))):
             obj = tuple([obj])
         else:
             obj = tuple(obj)
@@ -337,6 +361,18 @@ def load(fp, obj=None, **kwargs):  # noqa: C901
         obj = slice(*obj)
     elif tp == 'NoneType':
         obj = None
+
+    # Resolve correct types if available
+    if tm is not None and tn is not None:
+        try:
+            tt = import_module(tm)
+        except ModuleNotFoundError:
+            tt = None
+        if tt is not None and hasattr(tt, tn):
+            try:
+                obj = getattr(tt, tn)(obj)
+            except Exception:  # Catch all so that loading is completed
+                pass
 
     return obj
 

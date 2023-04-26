@@ -15,6 +15,8 @@ def _sortarray(par, key, val, transp=False, **kwargs):  # noqa: C901
         ragged = len(set(np.result_type(d) for d in val)) > 1
     except TypeError:
         ragged = False
+    except ValueError:  # Occurs on lists containing one string only(?)
+        ragged = len(val) > 1
     try:
         valasarr = np.asarray(val, dtype='O' if ragged else None)
     except ValueError:
@@ -69,6 +71,17 @@ def _sortdict(par, key, val, transp=False, **kwargs):
         _sortinto(p, k, v, transp, **kwargs)
 
 
+def _add_non_builtins(par, key, val):
+    tt = type(val)
+    if (tt not in (bool, str, int, float, tuple, list, dict, slice, range,
+                   type(None))
+            and not isinstance(val, (np.ndarray, np.record, np.generic))):
+        par[key].attrs['type_module'] = tt.__module__
+        par[key].attrs['type_name'] = tt.__name__
+    elif 'type' not in par[key].attrs:
+        par[key].attrs['type'] = tt.__name__
+
+
 def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
     """Wrapper for adder functions"""
     key = str(key)
@@ -108,14 +121,15 @@ def _sortinto(par, key, val, transp=False, **kwargs):  # noqa: C901
             _sortarray(par, key, np.zeros(2, dtype='uint64'))
             _setmatlabtype(par[key], 0)  # To zero
         else:
-            val = np.fromiter(map(ord, val), dtype='uint16')
-            val = np.atleast_2d(val)
-            par.create_dataset(key, data=val.T, **kwargs)
+            val_m = np.fromiter(map(ord, val), dtype='uint16')
+            val_m = np.atleast_2d(val_m)
+            par.create_dataset(key, data=val_m.T, **kwargs)
         _setmatlabtype(par[key], np.dtype(np.str_))  # Keep dtype
     elif transp:
         _sortarray(par, key, np.asarray(val), transp, **kwargs)
     else:
         par[key] = val
+    _add_non_builtins(par, key, val)
 
 
 def _removescalarfilters(filters):
@@ -291,6 +305,7 @@ def _fixmatlabstruct(fp):  # noqa: C901
                     refs.create_group(incr, track_order=True)
 
                     # Add struct info
+                    refs[incr].attrs.update(child.attrs)
                     refs[incr].attrs['MATLAB_class'] = np.bytes_('struct')
                     refs[incr].attrs['MATLAB_fields'] = fieldnames
 
